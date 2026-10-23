@@ -1,0 +1,178 @@
+:root {
+  --fg: #f6f2ea;
+  --accent: #c9742f;
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0f1512;
+  touch-action: none;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+canvas { display: block; }
+
+.hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  color: var(--fg);
+}
+
+.hud-title {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  text-shadow: 0 1px 3px rgba(0,0,0,.6);
+}
+.hud-title .brand { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; opacity: .8; }
+.hud-title .villa { font-size: 13px; opacity: .85; margin-top: 4px; }
+.hud-title .villa-select {
+  pointer-events: auto;
+  display: block;
+  margin-top: 2px;
+  font: inherit;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--fg);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  text-shadow: 0 1px 3px rgba(0,0,0,.6);
+}
+.hud-title .villa-select option { color: #111; }
+.hud .seg button:disabled { opacity: .45; cursor: default; }
+
+.hud-center {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+.hint-card {
+  background: rgba(15, 21, 18, .7);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 14px;
+  padding: 18px 26px;
+  text-align: center;
+  backdrop-filter: blur(6px);
+}
+.hint-card small { display: block; margin-top: 8px; opacity: .75; font-size: 13px; }
+
+.hud-bottom {
+  position: absolute;
+  bottom: 14px;
+  left: 0; right: 0;
+  text-align: center;
+  font-size: 12px;
+  opacity: .75;
+  text-shadow: 0 1px 3px rgba(0,0,0,.6);
+}
+
+.joystick-zone {
+  position: fixed;
+  left: 0; bottom: 0;
+  width: 40vw; height: 45vh;
+  z-index: 5;
+}
+
+/* --- режимы, кнопки, панорамы --- */
+.hud .btn, .hud .seg button, .hud .chip {
+  pointer-events: auto;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: rgba(15, 21, 18, .65);
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 999px;
+  padding: 8px 14px;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+.hud .seg { display: inline-flex; border-radius: 999px; overflow: hidden; border: 1px solid rgba(255,255,255,.18); }
+.hud .seg button { border: 0; border-radius: 0; }
+.hud .seg button.on, .hud .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.hud .vr-btn { margin-left: 8px; }
+.hud .vr-btn:disabled { opacity: .45; cursor: default; }
+
+.hud-topright { position: absolute; top: 16px; right: 16px; display: flex; align-items: center; }
+.hud-bottom.chips { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; padding: 0 16px; bottom: 18px; opacity: 1; }
+.hud-hint { position: absolute; bottom: 64px; left: 0; right: 0; text-align: center; font-size: 12px; opacity: .7; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+
+.hotspot-label {
+  white-space: nowrap;
+  font-size: 13px;
+  color: #fff;
+  background: rgba(15, 21, 18, .7);
+  border-radius: 999px;
+  padding: 4px 10px;
+  text-shadow: none;
+}
+
+.fade {
+  position: fixed; inset: 0; background: #0f1512; opacity: 0; pointer-events: none;
+  transition: opacity .22s ease;
+}
+.fade.on { opacity: 1; }
+
+@media (max-width: 600px) {
+  .hud-title .villa { font-size: 15px; }
+  .hud-topright { top: 84px; left: 16px; right: auto; }
+  .hud .btn, .hud .seg button, .hud .chip { font-size: 12px; padding: 7px 11px; }
+  .hud-hint { display: none; }
+}
+
+/* --- мини-план --- */
+.minimap {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 6;
+  color: var(--fg);
+  background: rgba(15, 21, 18, .72);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 14px;
+  padding: 8px;
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+.minimap-head { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.minimap-head select {
+  flex: 1; font: inherit; font-size: 12px; color: var(--fg); background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.18); border-radius: 8px; padding: 4px 8px;
+}
+.minimap-head select option { color: #111; }
+.minimap-head button {
+  font: inherit; width: 26px; height: 26px; color: var(--fg); background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.18); border-radius: 8px; cursor: pointer;
+}
+.minimap svg { display: block; }
+.mm-bg { fill: rgba(255,255,255,.06); }
+.mm-wallpoly { fill: rgba(240,236,226,.55); stroke: none; }
+.mm-wall { stroke: #f1ece2; stroke-width: 1.2; fill: none; }
+.mm-slab { stroke: rgba(241,236,226,.35); stroke-width: .7; fill: none; }
+.mm-stair { stroke: rgba(241,236,226,.5); stroke-width: .6; fill: none; }
+.mm-room { cursor: pointer; }
+.mm-room text { font-size: 7.5px; fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,.6); stroke-width: 2px; pointer-events: none; }
+.mm-room .mm-area { font-size: 7px; fill: rgba(255,255,255,.75); }
+.mm-room-hit { fill: rgba(201,116,47,.0); }
+.mm-room:hover .mm-room-hit { fill: rgba(201,116,47,.35); }
+.mm-fov { fill: rgba(201,116,47,.35); }
+.mm-me { fill: var(--accent); stroke: #fff; stroke-width: 1.5; }
+.mm-scale { font-size: 7px; fill: rgba(255,255,255,.55); }
+.minimap.collapsed { padding: 6px; }
+@media (max-width: 600px) {
+  .minimap { right: 10px; bottom: 10px; transform: scale(.8); transform-origin: bottom right; }
+}
