@@ -35,8 +35,9 @@ git worktree add --detach .deploy-tmp >/dev/null
 git worktree remove --force .deploy-tmp
 
 echo "→ включаю GitHub Pages (ветка gh-pages)"
+CNAME_ARGS=(); [ -f public/CNAME ] && CNAME_ARGS=(-f "cname=$(cat public/CNAME)")
 gh api -X POST "repos/$OWNER/$REPO/pages" -f 'source[branch]=gh-pages' -f 'source[path]=/' >/dev/null 2>&1 \
-  || gh api -X PUT "repos/$OWNER/$REPO/pages" -f 'source[branch]=gh-pages' -f 'source[path]=/' >/dev/null
+  || gh api -X PUT "repos/$OWNER/$REPO/pages" -f 'source[branch]=gh-pages' -f 'source[path]=/' "${CNAME_ARGS[@]}" >/dev/null
 
 if [ -f public/CNAME ]; then URL="https://$(cat public/CNAME)/"; else URL="https://$OWNER.github.io/$REPO/"; fi
 echo "→ ждём, пока Pages соберёт сайт (обычно 30–90 с)"
