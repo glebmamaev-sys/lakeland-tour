@@ -8,7 +8,8 @@ cd "$(dirname "$0")"
 
 REPO="lakeland-tour"
 OWNER="$(gh api user --jq .login)"
-BASE="/$REPO/"
+# базовый путь: корень, если подключён свой домен (public/CNAME) или задан VITE_BASE; иначе подпапка /lakeland-tour/
+if [ -n "${VITE_BASE:-}" ]; then BASE="$VITE_BASE"; elif [ -f public/CNAME ]; then BASE="/"; else BASE="/$REPO/"; fi
 
 echo "→ сборка под $BASE"
 VITE_BASE="$BASE" npm run build >/dev/null
@@ -37,7 +38,7 @@ echo "→ включаю GitHub Pages (ветка gh-pages)"
 gh api -X POST "repos/$OWNER/$REPO/pages" -f 'source[branch]=gh-pages' -f 'source[path]=/' >/dev/null 2>&1 \
   || gh api -X PUT "repos/$OWNER/$REPO/pages" -f 'source[branch]=gh-pages' -f 'source[path]=/' >/dev/null
 
-URL="https://$OWNER.github.io/$REPO/"
+if [ -f public/CNAME ]; then URL="https://$(cat public/CNAME)/"; else URL="https://$OWNER.github.io/$REPO/"; fi
 echo "→ ждём, пока Pages соберёт сайт (обычно 30–90 с)"
 for i in $(seq 1 30); do
   if curl -fsI "$URL" >/dev/null 2>&1; then break; fi
