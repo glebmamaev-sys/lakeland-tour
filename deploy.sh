@@ -27,8 +27,10 @@ fi
 echo "→ публикую сборку в ветку gh-pages"
 rm -rf .deploy-tmp
 git worktree prune
+git branch -D gh-pages >/dev/null 2>&1 || true   # старая локальная ветка мешает создать orphan
 git worktree add --detach .deploy-tmp >/dev/null
-( cd .deploy-tmp && git checkout -q --orphan gh-pages && git rm -rfq . >/dev/null 2>&1 || true
+( cd .deploy-tmp && git checkout -q --orphan gh-pages
+  git rm -rfq . >/dev/null 2>&1 || true
   cp -R ../dist/. . && git add -A
   git -c user.name="deploy" -c user.email="deploy@local" commit -qm "deploy $(date +%F_%H%M)"
   git push -f origin gh-pages )
