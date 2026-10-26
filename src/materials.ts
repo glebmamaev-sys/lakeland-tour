@@ -78,7 +78,9 @@ function classify(mesh: Mesh, mat: MeshStandardMaterial, largestGround: Mesh | n
   if (c.r > 0.9 && c.g > 0.9 && c.b < 0.1) return 'stucco';
   if (c.r > 0.99 && c.g > 0.99 && c.b > 0.99 && tris > 20_000 && tmpSize.x > 8 && tmpSize.z > 8) return 'stucco';
   // «KSM_Вентфасад_керамогранит» — акцентные полосы фасада → камень «фрагменты стен»
-  if (near(c, 0.75, 0.75, 0.75) && tris > 2000 && tmpSize.x > 8 && tmpSize.z > 8) return 'wallstone';
+  if (near(c, 0.75, 0.75, 0.75, 0.012) && tris > 2000 && tmpSize.x > 8 && tmpSize.z > 8) return 'wallstone';
+  // (0.75,0.74,0.73) — внутренние потолки/откосы вилл 2.x и 3 (большой меш внутри дома): светлый матовый, не серый
+  if (near(c, 0.75, 0.74, 0.73, 0.012) && tris > 5000 && tmpSize.x > 8 && tmpSize.z > 8) return 'ceiling';
   // озеленение из семейств Revit (серые пальмы/кусты, без IFC-материала)
   if (near(c, 0.4, 0.4, 0.4) && tris > 3000 && tmpSize.y > 2) return 'plants';
   // чаша бассейна: бирюзовая заглушка Revit или непрозрачный меш, вложенный в объём воды
@@ -154,29 +156,44 @@ function prepTexture(t: Texture, name: string, color = true) {
 }
 export type PlanRect = { min: [number, number]; max: [number, number]; above?: number };
 
-/** Удаляет у меша треугольники, центр которых (в плане, мировые x,z) попадает в один из прямоугольников. */
-export function cutTriangles(mesh: Mesh, cuts: PlanRect[]) {
+/**
+ * Удаляет у меша треугольники, центр которых (в плане, мировые x,z) попадает в один из прямоугольников.
+ * Для прямоугольников с `above` треугольники ниже порога не удаляются, а переносятся в отдельный меш
+ * (возвращается): у Виллы №3 рельеф и белая краска дома — один материал Revit, и внутри дома это пол
+ * верхнего уровня, потолок и колонны нижнего — они должны быть белыми, а не травой.
+ */
+export function cutTriangles(mesh: Mesh, cuts: PlanRect[]): Mesh | null {
   const g = mesh.geometry;
   const pos = g.getAttribute('position') as BufferAttribute;
   const uv = g.getAttribute('uv') as BufferAttribute | undefined;
   const idx = g.index;
   const triCount = idx ? idx.count / 3 : pos.count / 3;
   mesh.updateWorldMatrix(true, false);
-  const P: number[] = [], U: number[] = [];
+  const P: number[] = [], U: number[] = [], IP: number[] = [], IU: number[] = [];
   const w = new Vector3();
   for (let t = 0; t < triCount; t++) {
     const ids = [0, 1, 2].map((k) => (idx ? idx.getX(t * 3 + k) : t * 3 + k));
     let cx = 0, cy = 0, cz = 0;
     for (const i of ids) { w.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld); cx += w.x / 3; cy += w.y / 3; cz += w.z / 3; }
-    const inside = cuts.some((c) => cx >= c.min[0] && cx <= c.max[0] && cz >= c.min[1] && cz <= c.max[1] && (c.above === undefined || cy > c.above));
-    if (inside) continue;
-    for (const i of ids) { P.push(pos.getX(i), pos.getY(i), pos.getZ(i)); if (uv) U.push(uv.getX(i), uv.getY(i)); }
+    const rect = cuts.find((c) => cx >= c.min[0] && cx <= c.max[0] && cz >= c.min[1] && cz <= c.max[1]);
+    if (rect && (rect.above === undefined || cy > rect.above)) continue; // вырезать
+    const inside = !!rect; // внутри дома, ниже порога — поверхности здания
+    const dp = inside ? IP : P, du = inside ? IU : U;
+    for (const i of ids) { dp.push(pos.getX(i), pos.getY(i), pos.getZ(i)); if (uv) du.push(uv.getX(i), uv.getY(i)); }
   }
-  const ng = new BufferGeometry();
-  ng.setAttribute('position', new Float32BufferAttribute(P, 3));
-  if (uv) ng.setAttribute('uv', new Float32BufferAttribute(U, 2));
-  ng.computeVertexNormals();
-  mesh.geometry = ng;
+  const make = (p: number[], u: number[]) => {
+    const ng = new BufferGeometry();
+    ng.setAttribute('position', new Float32BufferAttribute(p, 3));
+    if (uv) ng.setAttribute('uv', new Float32BufferAttribute(u, 2));
+    ng.computeVertexNormals();
+    return ng;
+  };
+  mesh.geometry = make(P, U);
+  if (!IP.length) return null;
+  const inner = new Mesh(make(IP, IU));
+  inner.name = mesh.name + '_inside';
+  inner.position.copy(mesh.position); inner.quaternion.copy(mesh.quaternion); inner.scale.copy(mesh.scale);
+  return inner;
 }
 
 /** Проходит по сцене, заменяет материалы по ролям. Возвращает статистику для отладки. */
@@ -218,6 +235,7 @@ export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terra
     if (area > largestArea) { largestArea = area; largestGround = mesh; }
   });
 
+  const extras: { parent: Object3D; mesh: Mesh }[] = [];
   root.traverse((o) => {
     const mesh = o as Mesh;
     if (!mesh.isMesh) return;
@@ -230,7 +248,14 @@ export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terra
       // роли с текстурой у мешей без UV требуют «коробочной» развёртки — делаем на уровне меша
       const uvScale = BOX_UV_SCALE[role];
       if (uvScale && !src.map) boxUV(mesh, uvScale);
-      if ((role === 'ground' || role === 'terrain') && terrainCuts.length) cutTriangles(mesh, terrainCuts);
+      if ((role === 'ground' || role === 'terrain') && terrainCuts.length) {
+        const inner = cutTriangles(mesh, terrainCuts);
+        if (inner) {
+          inner.material = buildMaterial('ceiling', src, assets, options);
+          inner.userData.role = 'ceiling'; inner.castShadow = true; inner.receiveShadow = true;
+          extras.push({ parent: mesh.parent ?? root, mesh: inner });
+        }
+      }
       let mat = cache.get(m);
       if (!mat) {
         mat = buildMaterial(role, src, assets, options);
@@ -245,6 +270,7 @@ export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terra
     mesh.material = out.length === 1 ? out[0] : out;
     if (mesh.userData.role === 'glass' || mesh.userData.role === 'water') { mesh.castShadow = false; mesh.renderOrder = 10; }
   });
+  for (const e of extras) { e.parent.add(e.mesh); e.mesh.updateMatrixWorld(true); stats.ceiling++; }
   return stats;
 }
 
@@ -292,7 +318,8 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
       return m;
     }
     case 'ceiling':
-      return new MeshStandardMaterial({ color: new Color('#e9e4da'), roughness: 0.95, metalness: 0, side: DoubleSide });
+      // потолки освещены только снизу (небо их не видит) — чуть подсвечиваем, иначе серые
+      return new MeshStandardMaterial({ color: new Color('#e9e4da'), emissive: new Color('#262522'), roughness: 0.95, metalness: 0, side: DoubleSide });
     case 'textured': {
       const m = src.clone();
       m.roughness = 0.9; m.metalness = 0; m.side = DoubleSide;

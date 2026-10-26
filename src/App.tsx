@@ -75,10 +75,10 @@ export default function App() {
           <>
             <Sky sunPosition={[30, 40, 45]} turbidity={6} rayleigh={1.5} />
             <Suspense fallback={null}>
-              <Environment preset="park" background={false} environmentIntensity={0.9} />
+              <Environment preset="park" background={false} environmentIntensity={0.4} /> {/* 0.9 красило потолки в зелень травы HDRI */}
             </Suspense>
-            <hemisphereLight args={['#dfefff', '#a8a498', 1.1]} /> {/* нейтральный «низ»: с оливковым (#8a9470) потолки зеленели */}
-            <ambientLight intensity={0.45} />
+            <hemisphereLight args={['#dfefff', '#cfcbc3', 1.1]} /> {/* светлый нейтральный «низ»: потолки освещаются снизу; с оливковым (#8a9470) они зеленели */}
+            <ambientLight intensity={0.65} />
             <directionalLight
               position={[30, 40, 45]}
               intensity={2.4}
