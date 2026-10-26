@@ -11,6 +11,7 @@ import { PanoScene } from './PanoScene';
 import { VRButton } from './VRButton';
 import { Minimap } from './Minimap';
 import { RoomLabels } from './RoomLabels';
+import { Capture } from './Capture';
 
 import { MODELS } from './models';
 
@@ -93,6 +94,7 @@ export default function App() {
             />
             <Villa key={`villa-${villaId}`} id={villaId} onReady={onReady} />
             <RoomLabels villaId={villaId} />
+            <Capture />
             <Player
               key={`player-${villaId}`}
               spawn={status === 'placeholder' ? villa.spawn : MODELS[villaId]?.spawn ?? villa.spawn}
