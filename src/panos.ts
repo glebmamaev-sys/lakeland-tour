@@ -17,7 +17,7 @@ const tour = (villa: string, items: [string, string][]): Pano[] =>
   items.map(([id, title]) => ({ id, title, src: `panos/${villa}_${id}.jpg`, links: [] }));
 
 export const PANO_TOURS: Record<string, Pano[]> = {
-  villa1: tour('villa1', [['p1_pool', 'Терраса у бассейна'], ['p2_covered_terrace', 'Крытая терраса'], ['p3_kitchen', 'Кухня-гостиная'], ['p4_bedroom', 'Спальня'], ['p5_roof', 'Терраса на крыше']]),
+  villa1: [{ id: 'complex', title: 'Весь комплекс с дрона', src: 'panos/complex_p1_drone.jpg', links: [] }, ...tour('villa1', [['p1_pool', 'Терраса у бассейна'], ['p2_covered_terrace', 'Крытая терраса'], ['p3_kitchen', 'Кухня-гостиная'], ['p4_bedroom', 'Спальня'], ['p5_roof', 'Терраса на крыше']])],
   villa21: tour('villa21', [['p1_pool', 'Терраса у бассейна'], ['p2_living', 'Гостиная'], ['p3_bedroom', 'Спальня'], ['p4_terrace_l2', 'Терраса 2 этажа']]),
   villa22: tour('villa22', [['p1_pool', 'Терраса у бассейна'], ['p2_living', 'Гостиная'], ['p3_bedroom', 'Спальня'], ['p4_terrace_l2', 'Терраса 2 этажа']]),
   villa3: tour('villa3', [['p1_pool', 'Сад и бассейн'], ['p2_living', 'Гостиная'], ['p3_bedroom', 'Спальня'], ['p4_terrace_upper', 'Верхняя терраса']]),

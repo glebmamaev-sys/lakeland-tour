@@ -49,7 +49,7 @@ function hideSprites(root: Object3D): Object3D[] {
  * бросает веер лучей по BVH из видимой геометрии без стекла и штор и выбирает самый «глубокий» вид.
  * prefer — точка (x,z), к которой желательно смотреть (бассейн, окно, лагуна).
  */
-function bestView(scene: Scene, o: { center: [number, number]; level: number; radius?: number; eye?: number; prefer?: [number, number]; max?: number; w?: number; mode?: 'depth' | 'room' }) {
+function bestView(scene: Object3D, o: { center: [number, number]; level: number; radius?: number; eye?: number; prefer?: [number, number]; max?: number; w?: number; mode?: 'depth' | 'room' }) {
   const toggled: Object3D[] = [];
   scene.traverse((m) => {
     const mm = m as MeshT;
@@ -187,6 +187,45 @@ async function runShotlist(gl: WebGLRenderer, scene: Scene, camera: PerspectiveC
   return out;
 }
 
+/**
+ * Та же съёмка по шот-листу, но внутри сцены комплекса (режим «Комплекс»): точки шот-листа заданы в
+ * координатах модели виллы, здесь они переводятся в координаты дома `house-<id>` на генплане.
+ * В окнах получается настоящее окружение: лагуна, берег, соседние дома.
+ */
+async function runShotlistComplex(gl: WebGLRenderer, scene: Scene, camera: PerspectiveCamera, villa: string, houseId: string, only?: string[], prefix?: string) {
+  const list = (await (await fetch('/shotlist.json')).json()) as ShotItem[];
+  const house = scene.getObjectByName(`house-${houseId}`);
+  const drone = (window as unknown as { __drone?: { set: (p: [number, number, number], t: [number, number, number]) => void } }).__drone;
+  if (!house || !drone) throw new Error('нет дома ' + houseId + ' или сцены комплекса');
+  const out: string[] = [];
+  const toW = (v: Vector3) => house.localToWorld(v.clone());
+  for (const s of list) {
+    if (s.villa !== villa || (only && !only.includes(s.id))) continue;
+    let pos = new Vector3(...s.pos), dir = new Vector3(0, 0, -1);
+    if (s.auto) {
+      // bestView работает в координатах модели: временно ставим дом в начало координат
+      const saved = { p: house.position.clone(), r: house.rotation.y };
+      house.position.set(0, 0, 0); house.rotation.y = 0; house.updateMatrixWorld(true);
+      const b = bestView(house, s.auto);
+      house.position.copy(saved.p); house.rotation.y = saved.r; house.updateMatrixWorld(true);
+      if (b) { pos = new Vector3(...b.pos); dir.set(-Math.sin(b.yaw), 0.02, -Math.cos(b.yaw)); }
+    } else if (s.look) {
+      dir = new Vector3(...s.look).sub(new Vector3(s.pos[0], s.pos[1] + 1.62, s.pos[2]));
+      const hz = Math.hypot(dir.x, dir.z); dir.y = Math.max(-0.12, Math.min(0.12, Math.atan2(dir.y, hz))) * hz; dir.normalize();
+    }
+    const eye = toW(pos.clone().add(new Vector3(0, 1.62, 0)));
+    const tgt = toW(pos.clone().add(new Vector3(0, 1.62, 0)).add(dir.clone().multiplyScalar(10)));
+    drone.set([eye.x, eye.y, eye.z], [tgt.x, tgt.y, tgt.z]);
+    await new Promise((r) => setTimeout(r, 300));
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    const name = `${prefix ?? 'c_'}${villa}_${s.id}.jpg`;
+    out.push(s.kind === 'pano'
+      ? await capturePano(gl, scene, camera, { name, save: true })
+      : await captureShot(gl, scene, camera, { name, save: true, fov: s.fov }));
+  }
+  return out;
+}
+
 export function Capture() {
   const { gl, scene, camera } = useThree();
   useEffect(() => {
@@ -195,6 +234,7 @@ export function Capture() {
       shot: (o?: Parameters<typeof captureShot>[3]) => captureShot(gl, scene, camera as PerspectiveCamera, o),
       run: (villa: string, only?: string[]) => runShotlist(gl, scene, camera as PerspectiveCamera, villa, only),
       best: (o: Parameters<typeof bestView>[1]) => bestView(scene, o),
+      runComplex: (villa: string, houseId: string, only?: string[], prefix?: string) => runShotlistComplex(gl, scene, camera as PerspectiveCamera, villa, houseId, only, prefix),
     };
     (window as unknown as { __capture: unknown }).__capture = api;
     const onKey = (e: KeyboardEvent) => {

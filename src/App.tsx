@@ -12,6 +12,7 @@ import { VRButton } from './VRButton';
 import { Minimap } from './Minimap';
 import { RoomLabels } from './RoomLabels';
 import { Capture } from './Capture';
+import { ComplexScene } from './Complex';
 
 import { MODELS } from './models';
 
@@ -20,7 +21,7 @@ const VILLAS: Record<string, { title: string; spawn: [number, number, number] }>
   Object.entries(MODELS).map(([id, m]) => [id, { title: m.title, spawn: [0, 0.3, 12] as [number, number, number] }]),
 );
 
-type Mode = 'pano' | 'walk';
+type Mode = 'pano' | 'walk' | 'complex';
 
 export default function App() {
   const [villaId, setVillaId] = useState<keyof typeof VILLAS>('villa1');
@@ -72,7 +73,21 @@ export default function App() {
         gl={{ antialias: true, powerPreference: 'high-performance' }}
         onCreated={({ gl: r }) => { r.xr.enabled = true; setGl(r); }}
       >
-        {mode === 'walk' ? (
+        {mode === 'complex' ? (
+          <>
+            <Sky sunPosition={[60, 35, 80]} turbidity={6} rayleigh={1.5} />
+            <Suspense fallback={null}>
+              <Environment preset="park" background={false} environmentIntensity={0.4} />
+            </Suspense>
+            <hemisphereLight args={['#dfefff', '#cfcbc3', 1.0]} />
+            <ambientLight intensity={0.55} />
+            <directionalLight position={[120, 90, 160]} intensity={2.6} castShadow shadow-bias={-0.0005} shadow-normalBias={0.05}
+              shadow-mapSize={[4096, 4096]} shadow-camera-left={-160} shadow-camera-right={160} shadow-camera-top={160}
+              shadow-camera-bottom={-160} shadow-camera-far={600} />
+            <Suspense fallback={null}><ComplexScene /></Suspense>
+            <Capture />
+          </>
+        ) : mode === 'walk' ? (
           <>
             <Sky sunPosition={[30, 40, 45]} turbidity={6} rayleigh={1.5} />
             <Suspense fallback={null}>
@@ -122,6 +137,7 @@ export default function App() {
             {mode === 'pano' && pano ? pano.title : ''}
             {mode === 'walk' && status === 'placeholder' ? 'заглушка (ждём модель Revit)' : ''}
             {mode === 'walk' && status === 'model' ? 'модель Revit' : ''}
+            {mode === 'complex' ? 'весь комплекс по генплану · 12 строений' : ''}
           </div>
         </div>
 
@@ -129,6 +145,7 @@ export default function App() {
           <div className="seg">
             <button className={mode === 'pano' ? 'on' : ''} onClick={() => switchMode('pano')} disabled={!hasPanos} title={hasPanos ? '' : 'Панорам для этой виллы пока нет'}>Панорамы</button>
             <button className={mode === 'walk' ? 'on' : ''} onClick={() => switchMode('walk')}>Прогулка</button>
+            <button className={mode === 'complex' ? 'on' : ''} onClick={() => switchMode('complex')}>Комплекс</button>
           </div>
           {mode === 'pano' && <VRButton gl={gl} />}
         </div>
@@ -151,6 +168,7 @@ export default function App() {
           </div>
         )}
         {mode === 'walk' && input.mobile && <div className="hud-bottom">Левый джойстик — ходить · правая половина экрана — смотреть</div>}
+        {mode === 'complex' && <div className="hud-hint">Тяните — вращать · колесо — приблизить · правая кнопка — сдвинуть</div>}
         {mode === 'pano' && <div className="hud-hint">Тяните, чтобы осмотреться · колесо — зум · кружки — переход в соседнюю комнату</div>}
       </div>
       {mode === 'walk' && status === 'model' && <Minimap villaId={villaId} />}
