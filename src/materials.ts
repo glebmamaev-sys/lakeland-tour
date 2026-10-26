@@ -196,6 +196,68 @@ export function cutTriangles(mesh: Mesh, cuts: PlanRect[]): Mesh | null {
   return inner;
 }
 
+/**
+ * Делит меш на связные компоненты (по общим вершинам с одинаковыми координатами) и выносит в отдельный
+ * меш те, что подходят под pred(размер компоненты в мировых осях x/y(высота)/z, число треугольников).
+ * Нужен, потому что Revit-экспорт склеивает разные вещи одного цвета: пальмы и дверные коробки
+ * (виллы 2.x и 3), стены и шторы (белый меш вилл 2.x).
+ */
+export function splitComponents(mesh: Mesh, pred: (size: Vector3, tris: number) => boolean): Mesh | null {
+  const g = mesh.geometry;
+  const pos = g.getAttribute('position') as BufferAttribute;
+  const idx = g.index;
+  const triCount = idx ? idx.count / 3 : pos.count / 3;
+  mesh.updateWorldMatrix(true, false);
+  const parent = new Int32Array(pos.count).map((_, i) => i);
+  const find = (a: number): number => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
+  const union = (a: number, b: number) => { a = find(a); b = find(b); if (a !== b) parent[a] = b; };
+  const byPos = new Map<string, number>();
+  for (let i = 0; i < pos.count; i++) {
+    const k = `${pos.getX(i)},${pos.getY(i)},${pos.getZ(i)}`;
+    const j = byPos.get(k); if (j === undefined) byPos.set(k, i); else union(i, j);
+  }
+  const vi = (t: number, k: number) => (idx ? idx.getX(t * 3 + k) : t * 3 + k);
+  for (let t = 0; t < triCount; t++) { union(vi(t, 0), vi(t, 1)); union(vi(t, 1), vi(t, 2)); }
+  const boxes = new Map<number, { b: Box3; n: number }>();
+  const w = new Vector3();
+  for (let t = 0; t < triCount; t++) {
+    const r = find(vi(t, 0));
+    let e = boxes.get(r); if (!e) { e = { b: new Box3(), n: 0 }; boxes.set(r, e); }
+    e.n++;
+    for (let k = 0; k < 3; k++) { const i = vi(t, k); e.b.expandByPoint(w.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld)); }
+  }
+  const hit = new Set<number>();
+  const sz = new Vector3();
+  for (const [r, e] of boxes) if (pred(e.b.getSize(sz), e.n)) hit.add(r);
+  if (!hit.size || hit.size === boxes.size) return null;
+  const uv = g.getAttribute('uv') as BufferAttribute | undefined; // у ролей с boxUV развёртка уже есть — сохраняем
+  const keep: number[] = [], out: number[] = [], keepU: number[] = [], outU: number[] = [];
+  for (let t = 0; t < triCount; t++) {
+    const isOut = hit.has(find(vi(t, 0)));
+    const dst = isOut ? out : keep, du = isOut ? outU : keepU;
+    for (let k = 0; k < 3; k++) { const i = vi(t, k); dst.push(pos.getX(i), pos.getY(i), pos.getZ(i)); if (uv) du.push(uv.getX(i), uv.getY(i)); }
+  }
+  const make = (P: number[], U: number[]) => {
+    const ng = new BufferGeometry(); ng.setAttribute('position', new Float32BufferAttribute(P, 3));
+    if (uv) ng.setAttribute('uv', new Float32BufferAttribute(U, 2));
+    ng.computeVertexNormals(); return ng;
+  };
+  mesh.geometry = make(keep, keepU);
+  const part = new Mesh(make(out, outU));
+  part.name = mesh.name + '_split';
+  part.position.copy(mesh.position); part.quaternion.copy(mesh.quaternion); part.scale.copy(mesh.scale);
+  return part;
+}
+
+/** Серый (0.4) материал Revit вилл 2.x/3 = листья растений + сантехника + дверные коробки.
+ *  Коробки сцеплены общими вершинами в один компонент через весь дом: большой по горизонтали, невысокополигональный. */
+const isFrame = (s: Vector3, tris: number) => Math.max(s.x, s.z) > 2.5 && tris < 1500 && (s.y > 1.5 || Math.min(s.x, s.z) < 0.6); // коробки и балки навесов
+/** Унитазы, раковины: небольшой объём (не плоскость, как листья). */
+const isSanitary = (s: Vector3) => Math.min(s.x, s.y, s.z) > 0.015 && Math.max(s.x, s.y, s.z) < 1.5 && s.y < 1.2;
+/** Штора: волнистое полотно из тысяч треугольников высотой в один этаж (2–4,6 м); у Виллы №3 шторы
+ *  огибают угол, поэтому тонкость не обязательна, если треугольников очень много. */
+const isCurtain = (s: Vector3, tris: number) => tris > 1500 && s.y > 2 && s.y < 4.6 && Math.max(s.x, s.z) > 0.8 && (Math.min(s.x, s.z) < 0.4 || tris > 3000);
+
 /** Проходит по сцене, заменяет материалы по ролям. Возвращает статистику для отладки. */
 export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terrainCuts: PlanRect[] = [], options: MaterialOptions = {}): Record<Role, number> {
   const stats = Object.fromEntries(ROLES.map((r) => [r, 0])) as Record<Role, number>;
@@ -248,12 +310,53 @@ export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terra
       // роли с текстурой у мешей без UV требуют «коробочной» развёртки — делаем на уровне меша
       const uvScale = BOX_UV_SCALE[role];
       if (uvScale && !src.map) boxUV(mesh, uvScale);
+      if (role === 'plants' && mats.length === 1) {
+        const frames = splitComponents(mesh, isFrame);
+        if (frames) {
+          frames.material = buildMaterial('paint', src, assets, options);
+          frames.userData.role = 'paint'; frames.castShadow = true; frames.receiveShadow = true;
+          extras.push({ parent: mesh.parent ?? root, mesh: frames });
+        }
+        const sanitary = splitComponents(mesh, isSanitary);
+        if (sanitary) {
+          sanitary.material = new MeshStandardMaterial({ color: new Color('#f7f7f4'), roughness: 0.15, metalness: 0, side: DoubleSide });
+          sanitary.userData.role = 'default'; sanitary.castShadow = true; sanitary.receiveShadow = true;
+          extras.push({ parent: mesh.parent ?? root, mesh: sanitary });
+        }
+      }
+      // шторы внутри общего белого меша стен (виллы 2.x, 3): отделяем, помечаем и красим в белую ткань
+      if ((role === 'stucco' || role === 'default') && mats.length === 1 && !src.map) {
+        const tris0 = (mesh.geometry.index ? mesh.geometry.index.count : mesh.geometry.getAttribute('position').count) / 3;
+        if (tris0 > 20000) {
+          const cur = splitComponents(mesh, isCurtain);
+          if (cur) {
+            cur.material = new MeshStandardMaterial({ color: new Color('#f4f1ea'), roughness: 1, metalness: 0, side: DoubleSide });
+            cur.userData.role = 'default'; cur.userData.curtain = true; cur.receiveShadow = true;
+            extras.push({ parent: mesh.parent ?? root, mesh: cur });
+          }
+        }
+      }
+      // шторы и тюль: на время съёмки болванок для нейросети прячем (в продающих кадрах шторы открыты)
+      {
+        const c = src.color;
+        const tris = (mesh.geometry.index ? mesh.geometry.index.count : mesh.geometry.getAttribute('position').count) / 3;
+        if (/lace/.test((src.map?.name || '').toLowerCase()) ||
+            (tris > 15000 && (near(c, 0.97, 0.97, 0.94, 0.012) || near(c, 0.95, 0.95, 0.90, 0.012) || near(c, 0.88, 0.87, 0.86, 0.012)))) mesh.userData.curtain = true;
+      }
       if ((role === 'ground' || role === 'terrain') && terrainCuts.length) {
         const inner = cutTriangles(mesh, terrainCuts);
         if (inner) {
           inner.material = buildMaterial('ceiling', src, assets, options);
           inner.userData.role = 'ceiling'; inner.castShadow = true; inner.receiveShadow = true;
           extras.push({ parent: mesh.parent ?? root, mesh: inner });
+          // у Виллы №3 в этом же меше лежат шторы нижнего уровня
+          inner.updateMatrixWorld(true); inner.matrixWorld.multiplyMatrices(mesh.parent ? mesh.parent.matrixWorld : inner.matrixWorld, inner.matrix);
+          const cur = splitComponents(inner, isCurtain);
+          if (cur) {
+            cur.material = new MeshStandardMaterial({ color: new Color('#f4f1ea'), roughness: 1, metalness: 0, side: DoubleSide });
+            cur.userData.role = 'default'; cur.userData.curtain = true; cur.receiveShadow = true;
+            extras.push({ parent: mesh.parent ?? root, mesh: cur });
+          }
         }
       }
       let mat = cache.get(m);
@@ -270,7 +373,7 @@ export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terra
     mesh.material = out.length === 1 ? out[0] : out;
     if (mesh.userData.role === 'glass' || mesh.userData.role === 'water') { mesh.castShadow = false; mesh.renderOrder = 10; }
   });
-  for (const e of extras) { e.parent.add(e.mesh); e.mesh.updateMatrixWorld(true); stats.ceiling++; }
+  for (const e of extras) { e.parent.add(e.mesh); e.mesh.updateMatrixWorld(true); stats[e.mesh.userData.role as Role]++; }
   return stats;
 }
 

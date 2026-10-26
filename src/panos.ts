@@ -10,20 +10,15 @@ export type Pano = {
   links: PanoLink[];
 };
 
+// Панорамы 360°: болванки из тура (Capture.tsx, шот-лист public/shotlist.json) → FLUX 3 в Higgsfield, 26.10.2026.
+// Переход между панорамами — кнопками внизу экрана; точки-переходы внутри панорам не ставим
+// (нейросеть не гарантирует точное положение дверей). Художественная визуализация.
+const tour = (villa: string, items: [string, string][]): Pano[] =>
+  items.map(([id, title]) => ({ id, title, src: `panos/${villa}_${id}.jpg`, links: [] }));
+
 export const PANO_TOURS: Record<string, Pano[]> = {
-  villa1: [
-    // Первая настоящая панорама: болванка из тура (клавиша P на террасе у бассейна) → FLUX 3, 26.10.2026
-    { id: 'terrace_ai', title: 'Терраса у бассейна · AI-рендер', src: 'panos/villa1_06_terrace_ai.jpg', startYaw: 60,
-      links: [{ to: 'entrance', yaw: 110, label: 'Тестовые панорамы' }] },
-    { id: 'entrance', title: 'Вход', src: 'panos/villa1_01_entrance.jpg', startYaw: 0,
-      links: [{ to: 'living', yaw: 0 }, { to: 'terrace', yaw: 150 }] },
-    { id: 'living', title: 'Гостиная', src: 'panos/villa1_02_living_3d.jpg', stereo: 'tb', startYaw: 0,
-      links: [{ to: 'entrance', yaw: 180 }, { to: 'kitchen', yaw: 60 }, { to: 'terrace', yaw: -70 }] },
-    { id: 'kitchen', title: 'Кухня-столовая', src: 'panos/villa1_03_kitchen.jpg',
-      links: [{ to: 'living', yaw: -120 }, { to: 'terrace', yaw: 20 }] },
-    { id: 'bedroom', title: 'Спальня 1', src: 'panos/villa1_04_bedroom.jpg',
-      links: [{ to: 'living', yaw: 180 }] },
-    { id: 'terrace', title: 'Терраса, бассейн', src: 'panos/villa1_05_terrace.jpg',
-      links: [{ to: 'living', yaw: 180 }, { to: 'kitchen', yaw: -150 }, { to: 'bedroom', yaw: 100 }, { to: 'terrace_ai', yaw: 0, label: 'AI-рендер' }] },
-  ],
+  villa1: tour('villa1', [['p1_pool', 'Терраса у бассейна'], ['p2_covered_terrace', 'Крытая терраса'], ['p3_kitchen', 'Кухня-гостиная'], ['p4_bedroom', 'Спальня'], ['p5_roof', 'Терраса на крыше']]),
+  villa21: tour('villa21', [['p1_pool', 'Терраса у бассейна'], ['p2_living', 'Гостиная'], ['p3_bedroom', 'Спальня'], ['p4_terrace_l2', 'Терраса 2 этажа']]),
+  villa22: tour('villa22', [['p1_pool', 'Терраса у бассейна'], ['p2_living', 'Гостиная'], ['p3_bedroom', 'Спальня'], ['p4_terrace_l2', 'Терраса 2 этажа']]),
+  villa3: tour('villa3', [['p1_pool', 'Сад и бассейн'], ['p2_living', 'Гостиная'], ['p3_bedroom', 'Спальня'], ['p4_terrace_upper', 'Верхняя терраса']]),
 };

@@ -4,10 +4,11 @@
 import { useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import {
-  CubeCamera, HalfFloatType, LinearFilter, Mesh, OrthographicCamera, PlaneGeometry, Scene, ShaderMaterial,
+  CubeCamera, DoubleSide, HalfFloatType, Ray, Vector3, type Mesh as MeshT, LinearFilter, Mesh, OrthographicCamera, PlaneGeometry, Scene, ShaderMaterial,
   WebGLCubeRenderTarget, WebGLRenderTarget, type WebGLRenderer, type Camera, type Object3D, type PerspectiveCamera,
 } from 'three';
 import { input } from './input';
+import { buildCollider } from './collider';
 
 // кубическая карта → равнопромежуточная проекция; тонмаппинг ACES и sRGB как у основного рендера
 // (в render target three.js их не применяет)
@@ -34,10 +35,60 @@ const EQUIRECT = new ShaderMaterial({
   depthTest: false, depthWrite: false,
 });
 
+/** На время съёмки прячем подписи комнат (спрайты) и шторы (userData.curtain из materials.ts). */
 function hideSprites(root: Object3D): Object3D[] {
   const hidden: Object3D[] = [];
-  root.traverse((o) => { if ((o as { isSprite?: boolean }).isSprite && o.visible) { o.visible = false; hidden.push(o); } });
+  root.traverse((o) => {
+    if (((o as { isSprite?: boolean }).isSprite || o.userData.curtain) && o.visible) { o.visible = false; hidden.push(o); }
+  });
   return hidden;
+}
+
+/**
+ * Автоподбор интерьерного ракурса: перебирает точки сетки вокруг центра комнаты и 24 направления,
+ * бросает веер лучей по BVH из видимой геометрии без стекла и штор и выбирает самый «глубокий» вид.
+ * prefer — точка (x,z), к которой желательно смотреть (бассейн, окно, лагуна).
+ */
+function bestView(scene: Scene, o: { center: [number, number]; level: number; radius?: number; eye?: number; prefer?: [number, number]; max?: number; w?: number; mode?: 'depth' | 'room' }) {
+  const toggled: Object3D[] = [];
+  scene.traverse((m) => {
+    const mm = m as MeshT;
+    if (mm.isMesh && (mm.userData.curtain || mm.userData.role === 'glass' || mm.userData.role === 'water' || !mm.visible) && !mm.userData.noCollide) { mm.userData.noCollide = true; toggled.push(mm); }
+  });
+  const col = buildCollider(scene);
+  for (const m of toggled) delete m.userData.noCollide;
+  if (!col) return null;
+  const R = o.radius ?? 2.5, eye = o.eye ?? 1.45, y0 = o.level;
+  const ray = new Ray(), v = new Vector3(), d = new Vector3();
+  const dist = (x: number, y: number, z: number, dx: number, dy: number, dz: number, max = 30) => {
+    ray.origin.set(x, y, z); ray.direction.set(dx, dy, dz).normalize();
+    const h = col.bvh.raycastFirst(ray, DoubleSide); return h ? Math.min(h.distance, max) : max;
+  };
+  let best: { pos: [number, number, number]; yaw: number; score: number } | null = null;
+  for (let gx = -R; gx <= R + 1e-6; gx += 0.5) for (let gz = -R; gz <= R + 1e-6; gz += 0.5) {
+    const x = o.center[0] + gx, z = o.center[1] + gz;
+    const floor = dist(x, y0 + 1, z, 0, -1, 0, 3); if (Math.abs(floor - 1) > 0.25) continue; // нет пола на этом уровне
+    if (dist(x, y0 + 0.3, z, 0, 1, 0, 5) < 2.2) continue; // мебель/лестница над головой
+    let minH = 99; const ring: number[] = [];
+    for (let k = 0; k < 24; k++) { const a = (k / 24) * Math.PI * 2; const dd = dist(x, y0 + eye, z, Math.sin(a), 0, Math.cos(a)); ring.push(dd); minH = Math.min(minH, dd); }
+    if (minH < 0.7) continue; // слишком близко к стене
+    for (let k = 0; k < 24; k++) {
+      const yaw = (k / 24) * Math.PI * 2; // направление взгляда -z повернуть на yaw: (-sin, -cos)
+      let sum = 0, n = 0, near = 99;
+      for (let f = -3; f <= 3; f++) {
+        const a = yaw + f * 0.12; d.set(-Math.sin(a), 0, -Math.cos(a));
+        const dd = dist(x, y0 + eye, z, d.x, 0, d.z); near = Math.min(near, dd);
+        // depth: чем глубже вид, тем лучше; room: в кадре должна быть дальняя стена комнаты (2,5–9 м), а не пустота снаружи
+        sum += o.mode === 'room' ? (dd >= 2.5 && dd <= 9 ? 10 : dd > 9 ? 2 : 0) : Math.min(dd, o.max ?? 18);
+        n++;
+      }
+      let score = sum / n - (near < 1.5 ? 6 : 0);
+      if (o.prefer) { v.set(o.prefer[0] - x, 0, o.prefer[1] - z).normalize(); score += (o.w ?? 3) * (v.x * -Math.sin(yaw) + v.z * -Math.cos(yaw)); }
+      if (!best || score > best.score) best = { pos: [x, y0, z], yaw, score };
+    }
+  }
+  col.geometry.dispose();
+  return best;
 }
 
 function pixelsToBlob(data: Uint8Array, w: number, h: number, type: string, quality: number): Promise<Blob> {
@@ -88,22 +139,52 @@ async function capturePano(gl: WebGLRenderer, scene: Scene, camera: Camera, opts
 }
 
 /** Ракурс с текущей камеры в заданном разрешении (по умолчанию 2560×1440). */
-async function captureShot(gl: WebGLRenderer, scene: Scene, camera: PerspectiveCamera, opts: { name?: string; width?: number; height?: number; save?: boolean } = {}) {
+async function captureShot(gl: WebGLRenderer, scene: Scene, camera: PerspectiveCamera, opts: { name?: string; width?: number; height?: number; save?: boolean; fov?: number } = {}) {
   const W = opts.width ?? 2560, H = opts.height ?? 1440;
   const hidden = hideSprites(scene);
   const size = gl.getSize(new (await import('three')).Vector2());
   const pr = gl.getPixelRatio();
-  const aspect = camera.aspect;
+  const aspect = camera.aspect, fov = camera.fov;
   gl.setPixelRatio(1); gl.setSize(W, H, false);
-  camera.aspect = W / H; camera.updateProjectionMatrix();
+  // в туре fov 70 (широко, ~14 мм) — для продающих кадров 45–60 (≈28–35 мм), вертикали остаются вертикальными при pitch≈0
+  camera.aspect = W / H; camera.fov = opts.fov ?? 50; camera.updateProjectionMatrix();
   gl.render(scene, camera);
   const dataUrl = gl.domElement.toDataURL('image/jpeg', 0.92);
   gl.setPixelRatio(pr); gl.setSize(size.x, size.y, false);
-  camera.aspect = aspect; camera.updateProjectionMatrix();
+  camera.aspect = aspect; camera.fov = fov; camera.updateProjectionMatrix();
   for (const o of hidden) o.visible = true;
   const blob = await (await fetch(dataUrl)).blob();
   const p = camera.position;
   return deliver(blob, opts.name ?? `shot_${p.x.toFixed(1)}_${p.y.toFixed(1)}_${p.z.toFixed(1)}.jpg`, !!opts.save);
+}
+
+type ShotItem = { villa: string; id: string; kind: 'shot' | 'pano'; title: string; pos: [number, number, number]; look?: [number, number, number]; fov?: number; auto?: Parameters<typeof bestView>[1] };
+
+/** Пакетная съёмка по public/shotlist.json: телепорт в точку (полёт), взгляд на цель, кадр или панорама, сохранение в app/captures/. */
+async function runShotlist(gl: WebGLRenderer, scene: Scene, camera: PerspectiveCamera, villa: string, only?: string[]) {
+  const list = (await (await fetch('/shotlist.json')).json()) as ShotItem[];
+  const out: string[] = [];
+  for (const s of list) {
+    if (s.villa !== villa || (only && !only.includes(s.id))) continue;
+    input.fly = true;
+    let autoYaw: number | null = null;
+    if (s.auto) { const b = bestView(scene, s.auto); if (b) { s.pos = b.pos; autoYaw = b.yaw; console.info('[bestView]', s.id, b); } }
+    input.teleport = [s.pos[0], s.pos[1], s.pos[2]];
+    if (autoYaw !== null) { input.yaw = autoYaw; input.pitch = 0.02; }
+    else if (s.look) {
+      const dx = s.look[0] - s.pos[0], dy = s.look[1] - (s.pos[1] + 1.62), dz = s.look[2] - s.pos[2];
+      input.yaw = Math.atan2(-dx, -dz);
+      input.pitch = Math.max(-0.12, Math.min(0.12, Math.atan2(dy, Math.hypot(dx, dz)))); // почти горизонт — вертикали вертикальны
+    } else { input.yaw = 0; input.pitch = 0; }
+    // ждём, пока Player применит телепорт и камера обновится: пауза + два кадра rAF
+    await new Promise((r) => setTimeout(r, 400));
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    const name = `${villa}_${s.id}.jpg`;
+    out.push(s.kind === 'pano'
+      ? await capturePano(gl, scene, camera, { name, save: true })
+      : await captureShot(gl, scene, camera, { name, save: true, fov: s.fov }));
+  }
+  return out;
 }
 
 export function Capture() {
@@ -112,6 +193,8 @@ export function Capture() {
     const api = {
       pano: (o?: Parameters<typeof capturePano>[3]) => capturePano(gl, scene, camera, o),
       shot: (o?: Parameters<typeof captureShot>[3]) => captureShot(gl, scene, camera as PerspectiveCamera, o),
+      run: (villa: string, only?: string[]) => runShotlist(gl, scene, camera as PerspectiveCamera, villa, only),
+      best: (o: Parameters<typeof bestView>[1]) => bestView(scene, o),
     };
     (window as unknown as { __capture: unknown }).__capture = api;
     const onKey = (e: KeyboardEvent) => {
@@ -122,6 +205,5 @@ export function Capture() {
     window.addEventListener('keydown', onKey);
     return () => { window.removeEventListener('keydown', onKey); };
   }, [gl, scene, camera]);
-  void input;
   return null;
 }
