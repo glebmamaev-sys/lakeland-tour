@@ -69,11 +69,19 @@ function makeBounds(root: Object3D): Group {
 function GlbVilla({ id, onLoaded }: { id: string; onLoaded: () => void }) {
   const cfg = MODELS[id];
   const { scene } = useGLTF(asset(cfg.url));
-  const grass = useTexture(asset('textures/grass.jpg'));
+  const tex = useTexture({
+    grass: asset('textures/grass.jpg'),
+    slats: asset('textures/slats.jpg'), slatsN: asset('textures/slats_n.webp'),
+    walnut: asset('textures/walnut.jpg'),
+    stucco: asset('textures/stucco.jpg'), stuccoN: asset('textures/stucco_n.webp'),
+    wallstone: asset('textures/wallstone.jpg'),
+    stone2: asset('textures/stone2.jpg'), stone2N: asset('textures/stone2_n.webp'),
+    mosaic: asset('textures/mosaic.jpg'),
+  });
   useEffect(() => {
-    // Материалы по ролям (стекло, вода, земля, потолки, текстуры Revit); статистика в консоль
+    // Материалы по ролям (стекло, вода, земля, потолки, текстуры Revit и отделка по текстурам Романа); статистика в консоль
     scene.updateMatrixWorld(true);
-    const stats = applyMaterialRules(scene, { grass }, cfg.terrainCuts ?? []);
+    const stats = applyMaterialRules(scene, tex, cfg.terrainCuts ?? [], { paint: cfg.paint });
     console.info('[villa materials]', cfg.title, stats);
     (window as unknown as { __villaScene: unknown }).__villaScene = scene;
     // вспомогательные невидимые коллайдеры: пандусы из конфига и границы участка
@@ -88,7 +96,7 @@ function GlbVilla({ id, onLoaded }: { id: string; onLoaded: () => void }) {
     // сцена смонтирована — можно строить коллайдер (на следующий кадр, когда обновятся матрицы)
     const r = requestAnimationFrame(onLoaded);
     return () => cancelAnimationFrame(r);
-  }, [scene, grass, onLoaded, cfg.title]);
+  }, [scene, tex, onLoaded, cfg.title, cfg.paint]);
   return <primitive object={scene} rotation={cfg.rotation} position={cfg.offset} />;
 }
 

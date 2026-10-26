@@ -77,7 +77,7 @@ export default function App() {
             <Suspense fallback={null}>
               <Environment preset="park" background={false} environmentIntensity={0.9} />
             </Suspense>
-            <hemisphereLight args={['#dfefff', '#8a9470', 1.1]} />
+            <hemisphereLight args={['#dfefff', '#a8a498', 1.1]} /> {/* нейтральный «низ»: с оливковым (#8a9470) потолки зеленели */}
             <ambientLight intensity={0.45} />
             <directionalLight
               position={[30, 40, 45]}

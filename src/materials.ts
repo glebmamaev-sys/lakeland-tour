@@ -3,10 +3,20 @@
 // прозрачность, цвет, размер, ориентация граней и наличие текстуры.
 import {
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, Float32BufferAttribute, Material, Mesh,
-  MeshPhysicalMaterial, MeshStandardMaterial, Object3D, RepeatWrapping, SRGBColorSpace, Texture, Vector3,
+  MeshPhysicalMaterial, MeshStandardMaterial, Object3D, RepeatWrapping, SRGBColorSpace, Texture, Vector2, Vector3,
 } from 'three';
 
-export type Role = 'glass' | 'water' | 'ground' | 'paving' | 'terrain' | 'ceiling' | 'textured' | 'default';
+export type Role =
+  | 'glass' | 'water' | 'ground' | 'paving' | 'terrain' | 'ceiling' | 'textured' | 'default'
+  // отделка по текстурам бюро «Алгоритм» (Роман), см. README «Материалы»
+  | 'slats' | 'walnut' | 'stucco' | 'wallstone' | 'mosaic' | 'paint' | 'plants';
+
+export const ROLES: Role[] = ['glass', 'water', 'ground', 'paving', 'terrain', 'ceiling', 'textured', 'default', 'slats', 'walnut', 'stucco', 'wallstone', 'mosaic', 'paint', 'plants'];
+
+/** Цвет Revit-материала (из IFC: IfcSurfaceStyle → IfcColourRgb) совпадает с запрошенным с допуском. */
+function near(c: Color, r: number, g: number, b: number, tol = 0.025) {
+  return Math.abs(c.r - r) < tol && Math.abs(c.g - g) < tol && Math.abs(c.b - b) < tol;
+}
 
 export type MaterialStats = { role: Role; count: number };
 
@@ -36,7 +46,7 @@ function horizontalShare(mesh: Mesh): number {
   return total ? up / total : 0;
 }
 
-function classify(mesh: Mesh, mat: MeshStandardMaterial, largestGround: Mesh | null): Role {
+function classify(mesh: Mesh, mat: MeshStandardMaterial, largestGround: Mesh | null, waterBoxes: Box3[]): Role {
   const map = mat.map;
   const mapName = (map?.name || '').toLowerCase();
   // мировые размеры (геометрия квантована, масштаб сидит в узле): x,z — план, y — высота
@@ -57,6 +67,27 @@ function classify(mesh: Mesh, mat: MeshStandardMaterial, largestGround: Mesh | n
   // площадка/участок: самый большой меш без текстуры — трава; остальные большие плоские — дороги/мощение
   if (tmpSize.x > 50 && tmpSize.z > 30) return mesh === largestGround ? 'ground' : 'paving';
   if (tmpSize.x > 25 && tmpSize.z > 25 && tmpSize.y < 3) return 'paving';
+  // --- отделка по цветам Revit-материалов (одинаковы во всех виллах; расшифровка цвет→имя из IFC) ---
+  // «Панель из древесины» / «Деревянный каркас» — обшивка фасадов → реечная панель СМ Wall
+  if (near(c, 0.88, 0.70, 0.49)) return 'slats';
+  // «KSM_Дерево_Орех» — перголы над террасами и реечные экраны
+  if (near(c, 0.5, 0.5, 0.5)) return 'walnut';
+  // «KSM_краска_RAL 7021/7005» — перила, рамы, козырьки; в экспорте оранжевая заглушка
+  if (near(c, 0.98, 0.52, 0.17)) return 'paint';
+  // «KSM_01_Штукатурка …» (жёлтая заглушка) и белые крашеные стены (вилла 2.x — один большой меш без UV)
+  if (c.r > 0.9 && c.g > 0.9 && c.b < 0.1) return 'stucco';
+  if (c.r > 0.99 && c.g > 0.99 && c.b > 0.99 && tris > 20_000 && tmpSize.x > 8 && tmpSize.z > 8) return 'stucco';
+  // «KSM_Вентфасад_керамогранит» — акцентные полосы фасада → камень «фрагменты стен»
+  if (near(c, 0.75, 0.75, 0.75) && tris > 2000 && tmpSize.x > 8 && tmpSize.z > 8) return 'wallstone';
+  // озеленение из семейств Revit (серые пальмы/кусты, без IFC-материала)
+  if (near(c, 0.4, 0.4, 0.4) && tris > 3000 && tmpSize.y > 2) return 'plants';
+  // чаша бассейна: бирюзовая заглушка Revit или непрозрачный меш, вложенный в объём воды
+  if (c.b > 0.6 && c.g > 0.6 && c.r < 0.45) return 'mosaic';
+  tmpBox.setFromObject(mesh);
+  for (const w of waterBoxes) {
+    const inPlan = tmpBox.min.x > w.min.x - 0.3 && tmpBox.max.x < w.max.x + 0.3 && tmpBox.min.z > w.min.z - 0.3 && tmpBox.max.z < w.max.z + 0.3;
+    if (inPlan && tmpBox.max.y <= w.max.y + 0.25 && tmpBox.min.y <= w.min.y + 0.3 && tmpSize.y < 3.5) return 'mosaic';
+  }
   // тёмные горизонтальные плоскости размером с дом — потолки/подшивки из Revit
   if (lum < 0.16 && tmpSize.x > 8 && tmpSize.z > 8 && horizontalShare(mesh) > 0.85) return 'ceiling';
   return 'default';
@@ -101,7 +132,26 @@ function boxUV(mesh: Mesh, scale: number) {
   mesh.geometry = ng;
 }
 
-export type MaterialAssets = { grass: Texture };
+export type MaterialAssets = {
+  grass: Texture;
+  /** Текстуры Романа (3D чертежи/Мои, 7_Текстура), подготовлены scripts/prep_textures.py */
+  slats: Texture; slatsN: Texture; walnut: Texture; stucco: Texture; stuccoN: Texture;
+  wallstone: Texture; stone2: Texture; stone2N: Texture; mosaic: Texture;
+};
+export type MaterialOptions = {
+  /** Цвет «краски» (RAL 7021 по умолчанию; у Виллы №3 это RAL 7005 серый) */
+  paint?: string;
+};
+/** Масштаб «коробочной» развёртки (м на один повтор текстуры) по ролям без UV. */
+const BOX_UV_SCALE: Partial<Record<Role, number>> = { ground: 4, terrain: 4, slats: 0.45, walnut: 1.5, stucco: 1.2, wallstone: 1.0, mosaic: 0.6 };
+
+function prepTexture(t: Texture, name: string, color = true) {
+  t.wrapS = t.wrapT = RepeatWrapping;
+  if (color) t.colorSpace = SRGBColorSpace;
+  t.anisotropy = 8;
+  t.name = name;
+  t.needsUpdate = true;
+}
 export type PlanRect = { min: [number, number]; max: [number, number]; above?: number };
 
 /** Удаляет у меша треугольники, центр которых (в плане, мировые x,z) попадает в один из прямоугольников. */
@@ -130,12 +180,28 @@ export function cutTriangles(mesh: Mesh, cuts: PlanRect[]) {
 }
 
 /** Проходит по сцене, заменяет материалы по ролям. Возвращает статистику для отладки. */
-export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terrainCuts: PlanRect[] = []): Record<Role, number> {
-  const stats: Record<Role, number> = { glass: 0, water: 0, ground: 0, paving: 0, terrain: 0, ceiling: 0, textured: 0, default: 0 };
+export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terrainCuts: PlanRect[] = [], options: MaterialOptions = {}): Record<Role, number> {
+  const stats = Object.fromEntries(ROLES.map((r) => [r, 0])) as Record<Role, number>;
   const cache = new Map<Material, Material>();
-  assets.grass.wrapS = assets.grass.wrapT = RepeatWrapping;
-  assets.grass.colorSpace = SRGBColorSpace;
-  assets.grass.name = 'grass';
+  prepTexture(assets.grass, 'grass');
+  prepTexture(assets.slats, 'slats'); prepTexture(assets.slatsN, 'slats_n', false);
+  prepTexture(assets.walnut, 'walnut');
+  prepTexture(assets.stucco, 'stucco'); prepTexture(assets.stuccoN, 'stucco_n', false);
+  prepTexture(assets.wallstone, 'wallstone');
+  prepTexture(assets.stone2, 'stone2'); prepTexture(assets.stone2N, 'stone2_n', false);
+  prepTexture(assets.mosaic, 'mosaic');
+
+  // объёмы воды (бассейны) — чтобы распознать чашу под ними
+  const waterBoxes: Box3[] = [];
+  root.traverse((o) => {
+    const mesh = o as Mesh;
+    if (!mesh.isMesh) return;
+    const m = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as MeshStandardMaterial;
+    const role = mesh.userData.role as Role | undefined;
+    if (role === 'water' || (!role && (m.transparent || m.opacity < 0.99) && m.color.b > m.color.r + 0.12 && m.color.b > m.color.g)) {
+      waterBoxes.push(new Box3().setFromObject(mesh));
+    }
+  });
 
   // самый большой по площади нетекстурированный меш — земля участка
   let largestGround: Mesh | null = null, largestArea = 0;
@@ -160,13 +226,14 @@ export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terra
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     const out: Material[] = mats.map((m) => {
       const src = m as MeshStandardMaterial;
-      const role = classify(mesh, src, largestGround);
-      // роль ground для меша без UV требует планарной развёртки — делаем на уровне меша
-      if ((role === 'ground' || role === 'terrain') && !src.map) boxUV(mesh, 4);
+      const role = classify(mesh, src, largestGround, waterBoxes);
+      // роли с текстурой у мешей без UV требуют «коробочной» развёртки — делаем на уровне меша
+      const uvScale = BOX_UV_SCALE[role];
+      if (uvScale && !src.map) boxUV(mesh, uvScale);
       if ((role === 'ground' || role === 'terrain') && terrainCuts.length) cutTriangles(mesh, terrainCuts);
       let mat = cache.get(m);
       if (!mat) {
-        mat = buildMaterial(role, src, assets);
+        mat = buildMaterial(role, src, assets, options);
         cache.set(m, mat);
       }
       stats[role]++;
@@ -181,8 +248,22 @@ export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terra
   return stats;
 }
 
-function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAssets): Material {
+function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAssets, options: MaterialOptions): Material {
   switch (role) {
+    case 'slats':
+      return new MeshStandardMaterial({ map: assets.slats, normalMap: assets.slatsN, normalScale: new Vector2(0.9, 0.9), roughness: 0.75, metalness: 0, side: DoubleSide });
+    case 'walnut':
+      return new MeshStandardMaterial({ map: assets.walnut, color: new Color('#d9c6b0'), roughness: 0.7, metalness: 0, side: DoubleSide });
+    case 'stucco':
+      return new MeshStandardMaterial({ map: assets.stucco, normalMap: assets.stuccoN, normalScale: new Vector2(0.6, 0.6), color: new Color('#ebe6dc'), roughness: 0.95, metalness: 0, side: DoubleSide });
+    case 'wallstone':
+      return new MeshStandardMaterial({ map: assets.wallstone, roughness: 0.95, metalness: 0, side: DoubleSide });
+    case 'mosaic':
+      return new MeshStandardMaterial({ map: assets.mosaic, roughness: 0.35, metalness: 0, side: DoubleSide });
+    case 'paint':
+      return new MeshStandardMaterial({ color: new Color(options.paint ?? '#35383a'), roughness: 0.55, metalness: 0.1, side: DoubleSide });
+    case 'plants':
+      return new MeshStandardMaterial({ color: new Color('#4f7a3c'), roughness: 1, metalness: 0, side: DoubleSide });
     case 'glass':
       return new MeshPhysicalMaterial({
         color: new Color('#cfe6ea'), transparent: true, opacity: 0.22, roughness: 0.06, metalness: 0,
@@ -215,17 +296,22 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
     case 'textured': {
       const m = src.clone();
       m.roughness = 0.9; m.metalness = 0; m.side = DoubleSide;
+      // каменная кладка Revit (masonry.stone.ashlar) → камень Романа с его картой нормалей, UV из Revit
+      if (/ashlar|masonry|stone/.test((src.map?.name || '').toLowerCase())) {
+        m.map = assets.stone2; m.normalMap = assets.stone2N; m.normalScale = new Vector2(0.7, 0.7); m.color.set('#ffffff');
+        return m;
+      }
       if (m.map) { m.map.wrapS = m.map.wrapT = RepeatWrapping; m.map.colorSpace = SRGBColorSpace; m.map.needsUpdate = true; }
       return m;
     }
     default: {
       const m = src.clone();
       m.roughness = 0.88; m.metalness = 0; m.side = DoubleSide;
+      // бетон плит/парапетов вилл 2.x и 3 (0.67,0.63,0.61) под зеленоватым небом уходит в оливковый — светлее и нейтральнее
+      if (near(m.color, 0.67, 0.63, 0.61)) m.color.set('#dcd8d2');
       // чисто чёрные/очень тёмные «служебные» цвета Revit слегка поднимаем, иначе проваливаются в тень
       const lum = 0.3 * m.color.r + 0.59 * m.color.g + 0.11 * m.color.b;
       if (lum < 0.08) m.color.setScalar(0.18);
-      // «служебный» ядовито-жёлтый Revit (1,1,0) — на фасадах Виллы №3; заменяем на светлую штукатурку
-      if (m.color.r > 0.9 && m.color.g > 0.9 && m.color.b < 0.1) m.color.set('#e9e3d4');
       return m;
     }
   }

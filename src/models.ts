@@ -21,6 +21,8 @@ export type ModelConfig = {
   helpers?: RampHelper[];
   terrainCuts?: TerrainCut[];
   passages?: Passage[];
+  /** Цвет «краски» (Revit-материал KSM_краска_RAL…, в экспорте оранжевая заглушка); по умолчанию RAL 7021 чёрно-серый */
+  paint?: string;
 };
 
 export const MODELS: Record<string, ModelConfig> = {
@@ -134,6 +136,7 @@ export const MODELS: Record<string, ModelConfig> = {
     // Холм с юга выше крыши и проходит сквозь южные комнаты верхнего уровня (нет building pad).
     // Режем рельеф в контуре стен верхнего уровня, но только выше пола 0 — земля на отметке 0 остаётся полом.
     terrainCuts: [{ min: [-13.1, -6.7], max: [13.9, 6.7], above: 0.35 }],
+    paint: '#6f726e', // KSM_краска_RAL 7005 (серый)
     // Двери из DWG (aps/tools/dwg_plan.py): проёмы в коллайдере
     passages: [
       { min: [-6.15, -3.25, 1.98], max: [-5.05, -0.85, 3.50] }, // L1 door rot 90
