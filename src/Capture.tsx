@@ -4,7 +4,7 @@
 import { useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import {
-  CubeCamera, DoubleSide, HalfFloatType, Ray, Vector3, type Mesh as MeshT, LinearFilter, Mesh, OrthographicCamera, PlaneGeometry, Scene, ShaderMaterial,
+  Box3, CubeCamera, DoubleSide, Plane, HalfFloatType, Ray, Vector3, type Mesh as MeshT, LinearFilter, Mesh, OrthographicCamera, PlaneGeometry, Scene, ShaderMaterial,
   WebGLCubeRenderTarget, WebGLRenderTarget, type WebGLRenderer, type Camera, type Object3D, type PerspectiveCamera,
 } from 'three';
 import { input } from './input';
@@ -158,6 +158,25 @@ async function captureShot(gl: WebGLRenderer, scene: Scene, camera: PerspectiveC
   return deliver(blob, opts.name ?? `shot_${p.x.toFixed(1)}_${p.y.toFixed(1)}_${p.z.toFixed(1)}.jpg`, !!opts.save);
 }
 
+
+/** План этажа сверху: ортокамера, всё выше cutY отрезано. Нужен, чтобы найти помещения (ванные) на модели. */
+async function capturePlan(gl: WebGLRenderer, scene: Scene, cutY: number, name: string, px = 40) {
+  const root = (window as unknown as { __villaScene?: Object3D }).__villaScene ?? scene;
+  const b = new Box3();
+  root.traverse((o) => { const m = o as MeshT; if (m.isMesh && m.userData.role !== 'ground' && m.userData.role !== 'paving') b.expandByObject(m); });
+  const W = Math.ceil((b.max.x - b.min.x) * px), H = Math.ceil((b.max.z - b.min.z) * px);
+  const cam = new OrthographicCamera(b.min.x, b.max.x, -b.min.z, -b.max.z, 0.1, 200);
+  cam.position.set(0, cutY + 50, 0); cam.up.set(0, 0, -1); cam.lookAt(0, cutY, 0); cam.updateProjectionMatrix();
+  const size = gl.getSize(new (await import('three')).Vector2()); const pr = gl.getPixelRatio();
+  const planes = gl.clippingPlanes; gl.clippingPlanes = [new Plane(new Vector3(0, -1, 0), cutY)]; gl.localClippingEnabled = true;
+  gl.setPixelRatio(1); gl.setSize(W, H, false); gl.render(scene, cam);
+  const dataUrl = gl.domElement.toDataURL('image/jpeg', 0.9);
+  gl.clippingPlanes = planes; gl.setPixelRatio(pr); gl.setSize(size.x, size.y, false);
+  const blob = await (await fetch(dataUrl)).blob();
+  await deliver(blob, name, true);
+  return { minX: b.min.x, maxX: b.max.x, minZ: b.min.z, maxZ: b.max.z, px, W, H };
+}
+
 type ShotItem = { villa: string; id: string; kind: 'shot' | 'pano'; title: string; pos: [number, number, number]; look?: [number, number, number]; fov?: number; auto?: Parameters<typeof bestView>[1] };
 
 /** Пакетная съёмка по public/shotlist.json: телепорт в точку (полёт), взгляд на цель, кадр или панорама, сохранение в app/captures/. */
@@ -234,6 +253,7 @@ export function Capture() {
       shot: (o?: Parameters<typeof captureShot>[3]) => captureShot(gl, scene, camera as PerspectiveCamera, o),
       run: (villa: string, only?: string[]) => runShotlist(gl, scene, camera as PerspectiveCamera, villa, only),
       best: (o: Parameters<typeof bestView>[1]) => bestView(scene, o),
+      plan: (cutY: number, name: string, px?: number) => capturePlan(gl, scene, cutY, name, px),
       runComplex: (villa: string, houseId: string, only?: string[], prefix?: string) => runShotlistComplex(gl, scene, camera as PerspectiveCamera, villa, houseId, only, prefix),
     };
     (window as unknown as { __capture: unknown }).__capture = api;

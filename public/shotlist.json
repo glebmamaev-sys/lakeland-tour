@@ -157,6 +157,24 @@
  },
  {
   "villa": "villa1",
+  "id": "08_bathroom",
+  "kind": "shot",
+  "title": "Ванная при главной спальне",
+  "scene": "bathroom",
+  "pos": [
+   3.8,
+   6.6,
+   -10.0
+  ],
+  "look": [
+   0.6,
+   7.4,
+   -10.0
+  ],
+  "fov": 70
+ },
+ {
+  "villa": "villa1",
   "id": "p1_pool",
   "kind": "pano",
   "title": "Терраса у бассейна",
@@ -395,6 +413,24 @@
  },
  {
   "villa": "villa21",
+  "id": "08_bathroom",
+  "kind": "shot",
+  "title": "Ванная при главной спальне",
+  "scene": "bathroom",
+  "pos": [
+   10.5,
+   3.3,
+   -4.1
+  ],
+  "look": [
+   14.3,
+   4.0,
+   -4.3
+  ],
+  "fov": 70
+ },
+ {
+  "villa": "villa21",
   "id": "p1_pool",
   "kind": "pano",
   "title": "Терраса у бассейна",
@@ -611,6 +647,24 @@
  },
  {
   "villa": "villa22",
+  "id": "08_bathroom",
+  "kind": "shot",
+  "title": "Ванная при главной спальне",
+  "scene": "bathroom",
+  "pos": [
+   10.5,
+   3.3,
+   -4.1
+  ],
+  "look": [
+   14.3,
+   4.0,
+   -4.3
+  ],
+  "fov": 70
+ },
+ {
+  "villa": "villa22",
   "id": "p1_pool",
   "kind": "pano",
   "title": "Терраса у бассейна",
@@ -785,6 +839,24 @@
    "w": 4,
    "max": 8
   }
+ },
+ {
+  "villa": "villa3",
+  "id": "08_bathroom",
+  "kind": "shot",
+  "title": "Ванная при главной спальне",
+  "scene": "bathroom",
+  "pos": [
+   7.7,
+   0,
+   0.4
+  ],
+  "look": [
+   12.5,
+   0.6,
+   0.4
+  ],
+  "fov": 72
  },
  {
   "villa": "villa3",
