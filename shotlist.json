@@ -1,0 +1,935 @@
+[
+ {
+  "villa": "villa1",
+  "id": "01_hero_twilight",
+  "kind": "shot",
+  "title": "Якорный кадр, сумерки, с юго-востока",
+  "pos": [
+   19,
+   0,
+   13
+  ],
+  "look": [
+   5,
+   6.5,
+   -9
+  ],
+  "scene": "hero",
+  "fov": 45
+ },
+ {
+  "villa": "villa1",
+  "id": "02_road_golden",
+  "kind": "shot",
+  "title": "Золотой час, от дороги и бассейна",
+  "pos": [
+   -7,
+   7.9,
+   -32
+  ],
+  "look": [
+   5,
+   8.6,
+   -18
+  ],
+  "scene": "exterior",
+  "fov": 45
+ },
+ {
+  "villa": "villa1",
+  "id": "03_pool_terrace",
+  "kind": "shot",
+  "title": "Терраса у бассейна, уровень глаз",
+  "pos": [
+   10.5,
+   6.6,
+   -25
+  ],
+  "look": [
+   2,
+   7.4,
+   -15
+  ],
+  "scene": "exterior",
+  "fov": 48
+ },
+ {
+  "villa": "villa1",
+  "id": "04_covered_terrace_view",
+  "kind": "shot",
+  "title": "Крытая терраса 3 этажа, диагональ к саду",
+  "pos": [
+   9.6,
+   6.6,
+   -8.8
+  ],
+  "look": [
+   1,
+   7.6,
+   1
+  ],
+  "scene": "interior_view",
+  "fov": 55
+ },
+ {
+  "villa": "villa1",
+  "id": "05_kitchen",
+  "kind": "shot",
+  "title": "Кухня-столовая с выходом на террасу",
+  "pos": [
+   3.2,
+   0,
+   -3.8
+  ],
+  "look": [
+   7.5,
+   1.0,
+   3
+  ],
+  "scene": "kitchen",
+  "fov": 58,
+  "auto": {
+   "center": [
+    5.5,
+    -2.2
+   ],
+   "level": 0,
+   "radius": 1.5,
+   "prefer": [
+    6,
+    12
+   ],
+   "max": 7,
+   "w": 1.5,
+   "mode": "room"
+  }
+ },
+ {
+  "villa": "villa1",
+  "id": "06_bedroom",
+  "kind": "shot",
+  "title": "Спальня 3 этажа",
+  "pos": [
+   3.8,
+   6.6,
+   -12.4
+  ],
+  "look": [
+   1.2,
+   7.2,
+   -17.5
+  ],
+  "scene": "bedroom",
+  "fov": 58,
+  "auto": {
+   "center": [
+    2.3,
+    -14.5
+   ],
+   "level": 6.6,
+   "radius": 1.5,
+   "prefer": [
+    4.7,
+    -24
+   ],
+   "max": 7,
+   "w": 1.5,
+   "mode": "room"
+  }
+ },
+ {
+  "villa": "villa1",
+  "id": "07_roof",
+  "kind": "shot",
+  "title": "Терраса на крыше под перголой",
+  "pos": [
+   8.5,
+   9.9,
+   -9
+  ],
+  "look": [
+   2,
+   10.6,
+   -16
+  ],
+  "scene": "roof",
+  "fov": 48
+ },
+ {
+  "villa": "villa1",
+  "id": "08_bathroom",
+  "kind": "shot",
+  "title": "Ванная при главной спальне",
+  "scene": "bathroom",
+  "pos": [
+   3.8,
+   6.6,
+   -10.0
+  ],
+  "look": [
+   0.6,
+   7.4,
+   -10.0
+  ],
+  "fov": 70
+ },
+ {
+  "villa": "villa1",
+  "id": "p1_pool",
+  "kind": "pano",
+  "title": "Терраса у бассейна",
+  "pos": [
+   6,
+   6.6,
+   -20
+  ],
+  "scene": "exterior"
+ },
+ {
+  "villa": "villa1",
+  "id": "p2_covered_terrace",
+  "kind": "pano",
+  "title": "Крытая терраса 3 этажа",
+  "pos": [
+   4.8,
+   6.6,
+   -6.3
+  ],
+  "scene": "interior_view",
+  "auto": {
+   "center": [
+    4.8,
+    -6.3
+   ],
+   "level": 6.6,
+   "radius": 1.5
+  }
+ },
+ {
+  "villa": "villa1",
+  "id": "p3_kitchen",
+  "kind": "pano",
+  "title": "Кухня-столовая",
+  "pos": [
+   5.5,
+   0,
+   -1.5
+  ],
+  "scene": "kitchen",
+  "auto": {
+   "center": [
+    5.5,
+    -2.2
+   ],
+   "level": 0,
+   "radius": 1.5,
+   "max": 7,
+   "w": 1
+  }
+ },
+ {
+  "villa": "villa1",
+  "id": "p4_bedroom",
+  "kind": "pano",
+  "title": "Спальня 3 этажа",
+  "pos": [
+   2.3,
+   6.6,
+   -14.5
+  ],
+  "scene": "bedroom",
+  "auto": {
+   "center": [
+    2.3,
+    -14.5
+   ],
+   "level": 6.6,
+   "radius": 1.2,
+   "max": 7,
+   "w": 1
+  }
+ },
+ {
+  "villa": "villa1",
+  "id": "p5_roof",
+  "kind": "pano",
+  "title": "Терраса на крыше",
+  "pos": [
+   4.75,
+   9.9,
+   -13
+  ],
+  "scene": "roof"
+ },
+ {
+  "villa": "villa21",
+  "id": "01_hero_twilight",
+  "kind": "shot",
+  "title": "Якорный кадр, сумерки, со стороны бассейна",
+  "pos": [
+   21,
+   0,
+   -24
+  ],
+  "look": [
+   7,
+   3,
+   -6
+  ],
+  "scene": "hero",
+  "fov": 45
+ },
+ {
+  "villa": "villa21",
+  "id": "02_entrance_golden",
+  "kind": "shot",
+  "title": "Золотой час, со стороны входа",
+  "pos": [
+   -9,
+   0,
+   11
+  ],
+  "look": [
+   6,
+   3,
+   -4
+  ],
+  "scene": "exterior",
+  "fov": 45
+ },
+ {
+  "villa": "villa21",
+  "id": "03_pool_terrace",
+  "kind": "shot",
+  "title": "Терраса у бассейна, уровень глаз",
+  "pos": [
+   12,
+   0,
+   -15.5
+  ],
+  "look": [
+   3,
+   1.5,
+   -8
+  ],
+  "scene": "exterior",
+  "fov": 48
+ },
+ {
+  "villa": "villa21",
+  "id": "04_living_view",
+  "kind": "shot",
+  "title": "Гостиная с видом на террасу и бассейн",
+  "pos": [
+   4.7,
+   0,
+   -3.2
+  ],
+  "look": [
+   4.7,
+   1.2,
+   -12
+  ],
+  "scene": "interior_view",
+  "fov": 58,
+  "auto": {
+   "center": [
+    4.7,
+    -4.9
+   ],
+   "level": 0,
+   "radius": 2,
+   "prefer": [
+    5.5,
+    -14
+   ]
+  }
+ },
+ {
+  "villa": "villa21",
+  "id": "05_kitchen",
+  "kind": "shot",
+  "title": "Кухня",
+  "pos": [
+   0.9,
+   0,
+   0.6
+  ],
+  "look": [
+   5,
+   1,
+   -5
+  ],
+  "scene": "kitchen",
+  "fov": 58,
+  "auto": {
+   "center": [
+    2.65,
+    -1.7
+   ],
+   "level": 0,
+   "radius": 1.5,
+   "prefer": [
+    5,
+    -10
+   ],
+   "max": 7,
+   "w": 1.5,
+   "mode": "room"
+  }
+ },
+ {
+  "villa": "villa21",
+  "id": "06_bedroom",
+  "kind": "shot",
+  "title": "Спальня 2 этажа",
+  "pos": [
+   9.9,
+   3.3,
+   -4.8
+  ],
+  "look": [
+   9.9,
+   4.3,
+   -11
+  ],
+  "scene": "bedroom",
+  "fov": 58,
+  "auto": {
+   "center": [
+    9.9,
+    -7.6
+   ],
+   "level": 3.3,
+   "radius": 1.5,
+   "prefer": [
+    9,
+    -16
+   ],
+   "max": 7,
+   "w": 1.5,
+   "mode": "room"
+  }
+ },
+ {
+  "villa": "villa21",
+  "id": "08_bathroom",
+  "kind": "shot",
+  "title": "Ванная при главной спальне",
+  "scene": "bathroom",
+  "pos": [
+   10.5,
+   3.3,
+   -4.1
+  ],
+  "look": [
+   14.3,
+   4.0,
+   -4.3
+  ],
+  "fov": 70
+ },
+ {
+  "villa": "villa21",
+  "id": "p1_pool",
+  "kind": "pano",
+  "title": "Терраса у бассейна",
+  "pos": [
+   6,
+   0,
+   -11
+  ],
+  "scene": "exterior"
+ },
+ {
+  "villa": "villa21",
+  "id": "p2_living",
+  "kind": "pano",
+  "title": "Гостиная",
+  "pos": [
+   4.7,
+   0,
+   -4.9
+  ],
+  "scene": "interior_view",
+  "auto": {
+   "center": [
+    4.7,
+    -4.9
+   ],
+   "level": 0,
+   "radius": 1.5
+  }
+ },
+ {
+  "villa": "villa21",
+  "id": "p3_bedroom",
+  "kind": "pano",
+  "title": "Спальня 2 этажа",
+  "pos": [
+   9.9,
+   3.3,
+   -7.6
+  ],
+  "scene": "bedroom",
+  "auto": {
+   "center": [
+    9.9,
+    -7.6
+   ],
+   "level": 3.3,
+   "radius": 1.2,
+   "max": 7,
+   "w": 1
+  }
+ },
+ {
+  "villa": "villa21",
+  "id": "p4_terrace_l2",
+  "kind": "pano",
+  "title": "Терраса 2 этажа",
+  "pos": [
+   2.3,
+   3.3,
+   -8.6
+  ],
+  "scene": "roof"
+ },
+ {
+  "villa": "villa22",
+  "id": "01_hero_twilight",
+  "kind": "shot",
+  "title": "Якорный кадр, сумерки, со стороны бассейна",
+  "pos": [
+   21,
+   0,
+   -24
+  ],
+  "look": [
+   7,
+   3,
+   -6
+  ],
+  "scene": "hero",
+  "fov": 45
+ },
+ {
+  "villa": "villa22",
+  "id": "02_entrance_golden",
+  "kind": "shot",
+  "title": "Золотой час, со стороны входа",
+  "pos": [
+   -9,
+   0,
+   11
+  ],
+  "look": [
+   6,
+   3,
+   -4
+  ],
+  "scene": "exterior",
+  "fov": 45
+ },
+ {
+  "villa": "villa22",
+  "id": "03_pool_terrace",
+  "kind": "shot",
+  "title": "Терраса у бассейна, уровень глаз",
+  "pos": [
+   12,
+   0,
+   -15.5
+  ],
+  "look": [
+   3,
+   1.5,
+   -8
+  ],
+  "scene": "exterior",
+  "fov": 48
+ },
+ {
+  "villa": "villa22",
+  "id": "04_living_view",
+  "kind": "shot",
+  "title": "Гостиная с видом на террасу и бассейн",
+  "pos": [
+   4.7,
+   0,
+   -3.2
+  ],
+  "look": [
+   4.7,
+   1.2,
+   -12
+  ],
+  "scene": "interior_view",
+  "fov": 58,
+  "auto": {
+   "center": [
+    4.7,
+    -4.9
+   ],
+   "level": 0,
+   "radius": 2,
+   "prefer": [
+    5.5,
+    -14
+   ]
+  }
+ },
+ {
+  "villa": "villa22",
+  "id": "05_kitchen",
+  "kind": "shot",
+  "title": "Кухня",
+  "pos": [
+   0.9,
+   0,
+   0.6
+  ],
+  "look": [
+   5,
+   1,
+   -5
+  ],
+  "scene": "kitchen",
+  "fov": 58,
+  "auto": {
+   "center": [
+    2.2,
+    -1.7
+   ],
+   "level": 0,
+   "radius": 1.5,
+   "prefer": [
+    5,
+    -10
+   ],
+   "max": 7,
+   "w": 1.5,
+   "mode": "room"
+  }
+ },
+ {
+  "villa": "villa22",
+  "id": "06_bedroom",
+  "kind": "shot",
+  "title": "Спальня 2 этажа",
+  "pos": [
+   9.9,
+   3.3,
+   -4.8
+  ],
+  "look": [
+   9.9,
+   4.3,
+   -11
+  ],
+  "scene": "bedroom",
+  "fov": 58,
+  "auto": {
+   "center": [
+    9.9,
+    -7.6
+   ],
+   "level": 3.3,
+   "radius": 1.5,
+   "prefer": [
+    9,
+    -16
+   ],
+   "max": 7,
+   "w": 1.5,
+   "mode": "room"
+  }
+ },
+ {
+  "villa": "villa22",
+  "id": "08_bathroom",
+  "kind": "shot",
+  "title": "Ванная при главной спальне",
+  "scene": "bathroom",
+  "pos": [
+   10.5,
+   3.3,
+   -4.1
+  ],
+  "look": [
+   14.3,
+   4.0,
+   -4.3
+  ],
+  "fov": 70
+ },
+ {
+  "villa": "villa22",
+  "id": "p1_pool",
+  "kind": "pano",
+  "title": "Терраса у бассейна",
+  "pos": [
+   6,
+   0,
+   -11
+  ],
+  "scene": "exterior"
+ },
+ {
+  "villa": "villa22",
+  "id": "p2_living",
+  "kind": "pano",
+  "title": "Гостиная",
+  "pos": [
+   4.7,
+   0,
+   -4.9
+  ],
+  "scene": "interior_view",
+  "auto": {
+   "center": [
+    4.7,
+    -4.9
+   ],
+   "level": 0,
+   "radius": 1.5
+  }
+ },
+ {
+  "villa": "villa22",
+  "id": "p3_bedroom",
+  "kind": "pano",
+  "title": "Спальня 2 этажа",
+  "pos": [
+   9.9,
+   3.3,
+   -7.6
+  ],
+  "scene": "bedroom",
+  "auto": {
+   "center": [
+    9.9,
+    -7.6
+   ],
+   "level": 3.3,
+   "radius": 1.2,
+   "max": 7,
+   "w": 1
+  }
+ },
+ {
+  "villa": "villa22",
+  "id": "p4_terrace_l2",
+  "kind": "pano",
+  "title": "Терраса 2 этажа",
+  "pos": [
+   4.9,
+   3.3,
+   -2.6
+  ],
+  "scene": "roof"
+ },
+ {
+  "villa": "villa3",
+  "id": "01_hero_twilight",
+  "kind": "shot",
+  "title": "Якорный кадр, сумерки, со стороны бассейна",
+  "pos": [
+   -24,
+   -3.3,
+   26
+  ],
+  "look": [
+   0,
+   0,
+   2
+  ],
+  "scene": "hero",
+  "fov": 45
+ },
+ {
+  "villa": "villa3",
+  "id": "02_entrance_golden",
+  "kind": "shot",
+  "title": "Золотой час, со стороны входа",
+  "pos": [
+   -19,
+   0,
+   -19
+  ],
+  "look": [
+   0,
+   1,
+   0
+  ],
+  "scene": "exterior",
+  "fov": 45
+ },
+ {
+  "villa": "villa3",
+  "id": "03_pool_terrace",
+  "kind": "shot",
+  "title": "Терраса у бассейна, уровень глаз",
+  "pos": [
+   12,
+   -3.3,
+   11
+  ],
+  "look": [
+   -2,
+   -1.8,
+   6
+  ],
+  "scene": "exterior",
+  "fov": 48
+ },
+ {
+  "villa": "villa3",
+  "id": "04_living_view",
+  "kind": "shot",
+  "title": "Гостиная нижнего уровня с видом на бассейн",
+  "pos": [
+   4.3,
+   -3.3,
+   -3.5
+  ],
+  "look": [
+   2,
+   -2.2,
+   10
+  ],
+  "scene": "interior_view",
+  "fov": 58,
+  "auto": {
+   "center": [
+    4.3,
+    -0.1
+   ],
+   "level": -3.3,
+   "radius": 2.5,
+   "prefer": [
+    -0.7,
+    13.4
+   ]
+  }
+ },
+ {
+  "villa": "villa3",
+  "id": "06_bedroom",
+  "kind": "shot",
+  "title": "Спальня верхнего уровня",
+  "pos": [
+   7.6,
+   0,
+   -1.4
+  ],
+  "scene": "bedroom",
+  "fov": 58,
+  "auto": {
+   "center": [
+    9.0,
+    -3.4
+   ],
+   "level": 0,
+   "radius": 1.2,
+   "prefer": [
+    16,
+    -3.4
+   ],
+   "w": 4,
+   "max": 8
+  }
+ },
+ {
+  "villa": "villa3",
+  "id": "08_bathroom",
+  "kind": "shot",
+  "title": "Ванная при главной спальне",
+  "scene": "bathroom",
+  "pos": [
+   7.7,
+   0,
+   0.4
+  ],
+  "look": [
+   12.5,
+   0.6,
+   0.4
+  ],
+  "fov": 72
+ },
+ {
+  "villa": "villa3",
+  "id": "p1_pool",
+  "kind": "pano",
+  "title": "Терраса у бассейна",
+  "pos": [
+   0.65,
+   -3.3,
+   8.2
+  ],
+  "scene": "exterior"
+ },
+ {
+  "villa": "villa3",
+  "id": "p2_living",
+  "kind": "pano",
+  "title": "Гостиная нижнего уровня",
+  "pos": [
+   4.3,
+   -3.3,
+   -0.1
+  ],
+  "scene": "interior_view",
+  "auto": {
+   "center": [
+    4.3,
+    -0.1
+   ],
+   "level": -3.3,
+   "radius": 1.5
+  }
+ },
+ {
+  "villa": "villa3",
+  "id": "p3_bedroom",
+  "kind": "pano",
+  "title": "Спальня верхнего уровня",
+  "pos": [
+   -8.75,
+   0,
+   -1.7
+  ],
+  "scene": "bedroom",
+  "auto": {
+   "center": [
+    9.5,
+    -3.4
+   ],
+   "level": 0,
+   "radius": 1.2,
+   "max": 7,
+   "w": 1
+  }
+ },
+ {
+  "villa": "villa3",
+  "id": "p4_terrace_upper",
+  "kind": "pano",
+  "title": "Верхняя терраса",
+  "pos": [
+   0.6,
+   0,
+   3.4
+  ],
+  "scene": "roof",
+  "auto": {
+   "center": [
+    0.6,
+    3.4
+   ],
+   "level": 0,
+   "radius": 1.5
+  }
+ }
+]
