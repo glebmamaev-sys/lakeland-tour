@@ -176,3 +176,11 @@ canvas { display: block; }
 @media (max-width: 600px) {
   .minimap { right: 10px; bottom: 10px; transform: scale(.8); transform-origin: bottom right; }
 }
+
+/* --- карта комплекса --- */
+.mm-title { flex: 1; font-size: 12px; opacity: .85; padding-left: 4px; }
+.mm-water { fill: rgba(45,107,116,.45); }
+.mm-site { fill: rgba(140,170,110,.55); stroke: rgba(255,255,255,.25); stroke-width: .8; }
+.mm-house { fill: rgba(241,236,226,.8); stroke: rgba(0,0,0,.35); stroke-width: .6; }
+.mm-room:hover .mm-house { fill: var(--accent); }
+.hud-center .building { font-size: 14px; opacity: .8; }

@@ -7,13 +7,13 @@ import { useGLTF, useTexture } from '@react-three/drei';
 import { buildCollider, colliderStore } from './collider';
 import { PlaceholderVilla } from './PlaceholderVilla';
 import { MODELS } from './models';
-import { applyMaterialRules } from './materials';
+import { applyMaterialRules, openDoors } from './materials';
 import { asset } from './assets';
 
 const hiddenMat = new MeshBasicMaterial({ visible: false });
 
 /** Невидимый пандус: плоскость по осевой линии from→to заданной ширины (попадает в коллайдер, не рисуется). */
-function makeRamp(h: RampHelper): Mesh {
+export function makeRamp(h: RampHelper): Mesh {
   const a = new Vector3(...h.from), b = new Vector3(...h.to);
   const len = a.distanceTo(b);
   const g = new PlaneGeometry(h.width, len);
@@ -82,7 +82,7 @@ function GlbVilla({ id, onLoaded }: { id: string; onLoaded: () => void }) {
     // Материалы по ролям (стекло, вода, земля, потолки, текстуры Revit и отделка по текстурам Романа); статистика в консоль
     scene.updateMatrixWorld(true);
     const stats = applyMaterialRules(scene, tex, cfg.terrainCuts ?? [], { paint: cfg.paint });
-    console.info('[villa materials]', cfg.title, stats);
+    console.info('[villa materials]', cfg.title, stats, 'door leaves removed:', openDoors(scene, cfg.passages ?? []));
     (window as unknown as { __villaScene: unknown }).__villaScene = scene;
     // вспомогательные невидимые коллайдеры: пандусы из конфига и границы участка
     const parent = scene.parent ?? scene;

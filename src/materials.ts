@@ -202,12 +202,11 @@ export function cutTriangles(mesh: Mesh, cuts: PlanRect[]): Mesh | null {
  * Нужен, потому что Revit-экспорт склеивает разные вещи одного цвета: пальмы и дверные коробки
  * (виллы 2.x и 3), стены и шторы (белый меш вилл 2.x).
  */
-export function splitComponents(mesh: Mesh, pred: (size: Vector3, tris: number) => boolean): Mesh | null {
-  const g = mesh.geometry;
+/** Связные компоненты геометрии: вершины склеены по совпадающим координатам, треугольники объединяют вершины. */
+function labelComponents(g: BufferGeometry) {
   const pos = g.getAttribute('position') as BufferAttribute;
   const idx = g.index;
   const triCount = idx ? idx.count / 3 : pos.count / 3;
-  mesh.updateWorldMatrix(true, false);
   const parent = new Int32Array(pos.count).map((_, i) => i);
   const find = (a: number): number => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
   const union = (a: number, b: number) => { a = find(a); b = find(b); if (a !== b) parent[a] = b; };
@@ -218,6 +217,59 @@ export function splitComponents(mesh: Mesh, pred: (size: Vector3, tris: number) 
   }
   const vi = (t: number, k: number) => (idx ? idx.getX(t * 3 + k) : t * 3 + k);
   for (let t = 0; t < triCount; t++) { union(vi(t, 0), vi(t, 1)); union(vi(t, 1), vi(t, 2)); }
+  return { pos, triCount, find, vi };
+}
+
+/**
+ * «Открытые двери»: внутри каждого проёма (координаты виллы) удаляются связные компоненты, похожие на дверное
+ * полотно — тонкие (≤ thick м), высокие (≥ 1.7 м) и широкие (≥ 0.5 м). Коробки, ручки и перемычки остаются.
+ * Вызывается один раз на модель (userData.doorsOpened на корне).
+ */
+export function openDoors(root: Object3D, passages: { min: [number, number, number]; max: [number, number, number] }[], thick = 0.14) {
+  if (!passages.length || root.userData.doorsOpened) return 0;
+  root.userData.doorsOpened = true;
+  root.updateMatrixWorld(true);
+  const pb = passages.map((p) => new Box3(new Vector3(...p.min), new Vector3(...p.max)).expandByScalar(0.15));
+  const mb = new Box3(), w = new Vector3(); let removed = 0;
+  root.traverse((o) => {
+    const mesh = o as Mesh;
+    if (!mesh.isMesh || mesh.userData.curtain || mesh.userData.helper) return;
+    const role = mesh.userData.role;
+    if (role === 'ground' || role === 'terrain' || role === 'plants' || role === 'water') return;
+    mb.setFromObject(mesh);
+    if (!pb.some((b) => b.intersectsBox(mb))) return;
+    const g = mesh.geometry;
+    const { pos, triCount, find, vi } = labelComponents(g);
+    const boxes = new Map<number, Box3>();
+    for (let i = 0; i < pos.count; i++) {
+      const r = find(i); let b = boxes.get(r); if (!b) { b = new Box3(); boxes.set(r, b); }
+      b.expandByPoint(w.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld));
+    }
+    const drop = new Set<number>();
+    const sz = new Vector3();
+    for (const [r, b] of boxes) {
+      b.getSize(sz);
+      const leaf = Math.min(sz.x, sz.z) <= thick && Math.max(sz.x, sz.z) >= 0.5 && sz.y >= 1.7 && sz.y <= 3.2;
+      if (leaf && pb.some((p) => p.containsBox(b))) drop.add(r);
+    }
+    if (!drop.size) return;
+    const uv = g.getAttribute('uv') as BufferAttribute | undefined;
+    const P: number[] = [], U: number[] = [];
+    for (let t = 0; t < triCount; t++) {
+      if (drop.has(find(vi(t, 0)))) { removed++; continue; }
+      for (let k = 0; k < 3; k++) { const i = vi(t, k); P.push(pos.getX(i), pos.getY(i), pos.getZ(i)); if (uv) U.push(uv.getX(i), uv.getY(i)); }
+    }
+    const ng = new BufferGeometry(); ng.setAttribute('position', new Float32BufferAttribute(P, 3));
+    if (uv) ng.setAttribute('uv', new Float32BufferAttribute(U, 2));
+    ng.computeVertexNormals(); mesh.geometry = ng;
+  });
+  return removed;
+}
+
+export function splitComponents(mesh: Mesh, pred: (size: Vector3, tris: number) => boolean): Mesh | null {
+  const g = mesh.geometry;
+  mesh.updateWorldMatrix(true, false);
+  const { pos, triCount, find, vi } = labelComponents(g);
   const boxes = new Map<number, { b: Box3; n: number }>();
   const w = new Vector3();
   for (let t = 0; t < triCount; t++) {
@@ -374,7 +426,41 @@ export function applyMaterialRules(root: Object3D, assets: MaterialAssets, terra
     if (mesh.userData.role === 'glass' || mesh.userData.role === 'water') { mesh.castShadow = false; mesh.renderOrder = 10; }
   });
   for (const e of extras) { e.parent.add(e.mesh); e.mesh.updateMatrixWorld(true); stats[e.mesh.userData.role as Role]++; }
+  // шторы раздвинуты: каждое полотно собрано в две узкие складки у краёв окна, стекло открыто
+  root.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.userData.curtain && !m.userData.gathered) { gatherCurtains(m); m.userData.gathered = true; } });
   return stats;
+}
+
+/**
+ * Раздвигает шторы: каждое связное полотно (компонент) сжимается вдоль своей длинной горизонтальной оси
+ * до двух узких панелей у краёв (по `part` от ширины каждая). Складки ткани при сжатии становятся гуще,
+ * как у собранной шторы. Работает в локальных координатах меша (Revit: Z вверх, X/Y — горизонталь).
+ */
+export function gatherCurtains(mesh: Mesh, part = 0.14) {
+  const g = mesh.geometry;
+  const uv = g.getAttribute('uv') as BufferAttribute | undefined;
+  const { pos, triCount, find, vi } = labelComponents(g);
+  const boxes = new Map<number, Box3>();
+  const w = new Vector3();
+  for (let i = 0; i < pos.count; i++) { const r = find(i); let b = boxes.get(r); if (!b) { b = new Box3(); boxes.set(r, b); } b.expandByPoint(w.set(pos.getX(i), pos.getY(i), pos.getZ(i))); }
+  const P: number[] = [], U: number[] = [];
+  const push = (t: number, side: 0 | 1, axis: 'x' | 'y', b: Box3) => {
+    for (let k = 0; k < 3; k++) {
+      const i = vi(t, k); let x = pos.getX(i), y = pos.getY(i); const z = pos.getZ(i);
+      if (axis === 'x') x = side === 0 ? b.min.x + (x - b.min.x) * part : b.max.x - (b.max.x - x) * part;
+      else y = side === 0 ? b.min.y + (y - b.min.y) * part : b.max.y - (b.max.y - y) * part;
+      P.push(x, y, z); if (uv) U.push(uv.getX(i), uv.getY(i));
+    }
+  };
+  for (let t = 0; t < triCount; t++) {
+    const b = boxes.get(find(vi(t, 0)))!;
+    const axis: 'x' | 'y' = b.max.x - b.min.x >= b.max.y - b.min.y ? 'x' : 'y';
+    push(t, 0, axis, b); push(t, 1, axis, b);
+  }
+  const ng = new BufferGeometry(); ng.setAttribute('position', new Float32BufferAttribute(P, 3));
+  if (uv) ng.setAttribute('uv', new Float32BufferAttribute(U, 2));
+  ng.computeVertexNormals();
+  mesh.geometry = ng;
 }
 
 function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAssets, options: MaterialOptions): Material {

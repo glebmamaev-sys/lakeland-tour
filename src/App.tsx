@@ -12,7 +12,8 @@ import { VRButton } from './VRButton';
 import { Minimap } from './Minimap';
 import { RoomLabels } from './RoomLabels';
 import { Capture } from './Capture';
-import { ComplexScene } from './Complex';
+import { ComplexScene, complexStore } from './Complex';
+import { ComplexMap } from './ComplexMap';
 
 import { MODELS } from './models';
 
@@ -22,12 +23,15 @@ const VILLAS: Record<string, { title: string; spawn: [number, number, number] }>
 );
 
 type Mode = 'pano' | 'walk' | 'complex';
+const NO_HUD = new URLSearchParams(location.search).has('nohud'); // чистый кадр для съёмки
 
 export default function App() {
   const [villaId, setVillaId] = useState<keyof typeof VILLAS>('villa1');
   const [mode, setMode] = useState<Mode>('pano');
   const [status, setStatus] = useState<'loading' | 'placeholder' | 'model'>('loading');
   const [locked, setLocked] = useState(false);
+  const [complexWalk, setComplexWalk] = useState(false); // «Комплекс»: с дрона (орбита) или пешком
+  const [colliderState, setColliderState] = useState(complexStore.collider);
   const [gl, setGl] = useState<WebGLRenderer | null>(null);
   const villa = VILLAS[villaId];
   const tour = PANO_TOURS[villaId] ?? [];
@@ -47,7 +51,7 @@ export default function App() {
   const pano = tour.find((p) => p.id === panoId) ?? tour[0];
 
   useEffect(() => {
-    const id = setInterval(() => setLocked(input.locked), 200);
+    const id = setInterval(() => { setLocked(input.locked); setColliderState(complexStore.collider); }, 200);
     return () => clearInterval(id);
   }, []);
 
@@ -84,7 +88,7 @@ export default function App() {
             <directionalLight position={[120, 90, 160]} intensity={2.6} castShadow shadow-bias={-0.0005} shadow-normalBias={0.05}
               shadow-mapSize={[4096, 4096]} shadow-camera-left={-160} shadow-camera-right={160} shadow-camera-top={160}
               shadow-camera-bottom={-160} shadow-camera-far={600} />
-            <Suspense fallback={null}><ComplexScene /></Suspense>
+            <Suspense fallback={null}><ComplexScene walk={complexWalk} /></Suspense>
             <Capture />
           </>
         ) : mode === 'walk' ? (
@@ -127,7 +131,7 @@ export default function App() {
 
       <div className={`fade${fade ? ' on' : ''}`} />
 
-      <div className="hud">
+      <div className="hud" style={NO_HUD ? { display: 'none' } : undefined}>
         <div className="hud-title">
           <div className="brand">Lake Land · Serendib</div>
           <select className="villa-select" value={villaId} onChange={(e) => selectVilla(e.target.value)} aria-label="Вилла">
@@ -137,7 +141,7 @@ export default function App() {
             {mode === 'pano' && pano ? pano.title : ''}
             {mode === 'walk' && status === 'placeholder' ? 'заглушка (ждём модель Revit)' : ''}
             {mode === 'walk' && status === 'model' ? 'модель Revit' : ''}
-            {mode === 'complex' ? 'весь комплекс по генплану · 12 строений' : ''}
+            {mode === 'complex' ? (complexWalk ? 'прогулка по комплексу · 12 строений' : 'весь комплекс по генплану · 12 строений') : ''}
           </div>
         </div>
 
@@ -148,6 +152,12 @@ export default function App() {
             <button className={mode === 'complex' ? 'on' : ''} onClick={() => switchMode('complex')}>Комплекс</button>
           </div>
           {mode === 'pano' && <VRButton gl={gl} />}
+          {mode === 'complex' && (
+            <div className="seg">
+              <button className={!complexWalk ? 'on' : ''} onClick={() => { if (document.pointerLockElement) document.exitPointerLock(); setComplexWalk(false); }}>С дрона</button>
+              <button className={complexWalk ? 'on' : ''} onClick={() => setComplexWalk(true)}>Пешком</button>
+            </div>
+          )}
         </div>
 
         {mode === 'pano' && (
@@ -168,11 +178,24 @@ export default function App() {
           </div>
         )}
         {mode === 'walk' && input.mobile && <div className="hud-bottom">Левый джойстик — ходить · правая половина экрана — смотреть</div>}
-        {mode === 'complex' && <div className="hud-hint">Тяните — вращать · колесо — приблизить · правая кнопка — сдвинуть</div>}
+        {mode === 'complex' && !complexWalk && <div className="hud-hint">Тяните — вращать · колесо — приблизить · правая кнопка — сдвинуть</div>}
+        {mode === 'complex' && complexWalk && colliderState !== 'ready' && (
+          <div className="hud-center"><div className="hint-card"><div>Готовим прогулку…</div><small>Собираем стены, рельеф и двери всех 12 строений</small></div></div>
+        )}
+        {mode === 'complex' && complexWalk && colliderState === 'ready' && !input.mobile && !locked && (
+          <div className="hud-center">
+            <div className="hint-card">
+              <div>Кликните, чтобы войти</div>
+              <small>W A S D — ходить · мышь — смотреть · Shift — быстрее · F — полёт · карта справа — перейти к вилле · Esc — выйти</small>
+            </div>
+          </div>
+        )}
+        {mode === 'complex' && complexWalk && input.mobile && <div className="hud-bottom">Левый джойстик — ходить · правая половина экрана — смотреть</div>}
         {mode === 'pano' && <div className="hud-hint">Тяните, чтобы осмотреться · колесо — зум · кружки — переход в соседнюю комнату</div>}
       </div>
       {mode === 'walk' && status === 'model' && <Minimap villaId={villaId} />}
-      {mode === 'walk' && input.mobile && <Joystick />}
+      {mode === 'complex' && complexWalk && !NO_HUD && <ComplexMap />}
+      {((mode === 'walk') || (mode === 'complex' && complexWalk)) && input.mobile && <Joystick />}
     </>
   );
 }
