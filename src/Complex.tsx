@@ -23,6 +23,9 @@ import { makeArtTexture, makeNoiseTexture, makeWeaveTexture, type DetailMaps } f
 import { furnishVilla, glassBoxes, waterBoxes } from './world/Interiors';
 import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
+import { Grass } from './world/Grass';
+import { useQuality } from './world/Quality';
+import { input } from './input';
 import { loadPlan } from './plan';
 import type { Plan } from './plan';
 
@@ -64,7 +67,7 @@ function setStage(name: string) {
 const WALK_SPAWN_XZ: [number, number] = [-36, -34];
 const LOD_FAR = 65;
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
-type BuiltScene = { site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null }; // м: дальше этого дом рисуется упрощённой копией
+type BuiltScene = { site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
@@ -468,13 +471,21 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         if (maxd < 0.002) break;
       }
     }
-    // меш участка
+    const net = buildPathNetwork(houses, WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]);
+    // меш участка; цвет вершин: газон, песок у воды, влажная тёмная полоса над водой, вытоптанная земля у дорожек,
+    // сухие пятна травы шумом
     const sp = new Float32Array(nx * nz * 3), su = new Float32Array(nx * nz * 2), scol = new Float32Array(nx * nz * 3);
-    const green = new Color('#cfdcc0'), sand = new Color('#d8cfb0');
+    const green = new Color('#cfdcc0'), sand = new Color('#d8cfb0'), wet = new Color('#a8b894'), worn = new Color('#c9c3a0'), dry = new Color('#d6d6a6');
+    const cc = new Color();
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
       const k = j * nx + i, x = x0 + i * step, z = z0 + j * step, y = h[k];
       sp.set([x, y, z], k * 3); su.set([x / 4, z / 4], k * 2);
-      const cc = y < W + 0.6 ? sand : green; scol.set([cc.r, cc.g, cc.b], k * 3);
+      cc.copy(y < W + 0.6 ? sand : y < W + 1.4 ? wet : green);
+      if (y >= W + 0.6) {
+        const dp = distToPaths(net, x, z); if (dp < 1.6) cc.lerp(worn, (1 - dp / 1.6) * 0.65);
+        const nse = Math.sin(x * 0.11 + 1.3) * Math.sin(z * 0.14 + 0.7) + Math.sin(x * 0.031) * Math.sin(z * 0.027); if (nse > 0.9) cc.lerp(dry, Math.min(1, (nse - 0.9) * 2) * 0.5);
+      }
+      scol.set([cc.r, cc.g, cc.b], k * 3);
     }
     const sidx: number[] = [];
     for (let j = 0; j < nz - 1; j++) for (let i = 0; i < nx - 1; i++) { const a = j * nx + i; sidx.push(a, a + nx, a + 1, a + 1, a + nx, a + nx + 1); }
@@ -520,7 +531,6 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const walls: BufferGeometry | null = null; void inHouseMask;
     // дорожки: сеть по генплану (въезд → проезд между 2.x → дорога ряда 1.x → вилла 3), ленты 2,6 м по рельефу
     setStage('terrain:paths');
-    const net = buildPathNetwork(houses, WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]);
     const ribbons = net.lines.map((l) => pathRibbon(l, 2.6, (x, z) => siteAt(x, z) ?? heightAt(x, z))).filter((g): g is BufferGeometry => !!g);
     const paths = ribbons.length ? mergeGeometries(ribbons, false) : null;
     // пальмы: окрестности (сетка 14 м со случайным сдвигом, суша, не на домах) и участок (в зелёных зонах, не на дорожках);
@@ -568,7 +578,15 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       }
     }
     setStage('terrain:done');
-    const builtNow = { site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
+    const hpInv = houses.map((hh) => ({ m: hh.matrix.clone().invert(), fp: hh.fp })); const lpG = new Vector3(); const shopB = c.buildings.find((b) => b.model === 'shop');
+    const grassOk = (x: number, z: number) => {
+      if (!inPoly(x, z, c.site.boundary) || waterAt(x, z) || distToPaths(net, x, z) < 1.3) return false;
+      if (shopB && Math.hypot(x - shopB.pos[0], z - shopB.pos[1]) < 8.5) return false;
+      for (const { m, fp } of hpInv) { lpG.set(x, 0, z).applyMatrix4(m); if (lpG.x > fp[0] - 0.3 && lpG.x < fp[2] + 0.3 && lpG.z > fp[1] - 0.3 && lpG.z < fp[3] + 0.3) return false; }
+      return true;
+    };
+    (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
+    const builtNow = { site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
     (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses };
   }, [data, instances, houses]);
@@ -604,6 +622,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     return [WALK_SPAWN_XZ[0], y + 0.4, WALK_SPAWN_XZ[1]];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [built, data]);
+  const lowQ = useQuality();
   const inSiteFn = useMemo(() => { const B = data?.c.site.boundary; return (x: number, z: number) => (B ? inPoly(x, z, B) : false); }, [data]);
   const spawnYaw = Math.atan2(-(WALK_LOOK_XZ[0] - WALK_SPAWN_XZ[0]), -(WALK_LOOK_XZ[1] - WALK_SPAWN_XZ[1]));
 
@@ -701,6 +720,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       </group>
       {built && <><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>}
       {data && <Lagoon level={data.c.water_level} />}
+      {built && complexStore.heightAt && !lowQ && !new URLSearchParams(location.search).has('nograss') && <Grass heightAt={complexStore.heightAt} ok={built.grassOk} count={input.mobile ? 25_000 : 110_000} radius={input.mobile ? 22 : 36} />}
       {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} idlers={shopObj ? [shopObj.userData.receptionistWorld as { x: number; y: number; z: number; yaw: number }] : []} />}
     </group>
   );

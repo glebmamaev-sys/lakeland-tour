@@ -10,12 +10,15 @@ import { PANO_TOURS } from './panos';
 import { PanoScene } from './PanoScene';
 import { VRButton } from './VRButton';
 import { useAmbient } from './Ambient';
+import { ComplexSun } from './world/ComplexSun';
+import { Bloom, EffectComposer, N8AO } from '@react-three/postprocessing';
+import { QualityWatch, useQuality } from './world/Quality';
 import { Minimap } from './Minimap';
 import { RoomLabels } from './RoomLabels';
 import { Capture } from './Capture';
 import { ComplexScene, complexStage, complexStore } from './Complex';
 import { ComplexMap } from './ComplexMap';
-import { SkyDome, SUN } from './world/SkyDome';
+import { SkyDome } from './world/SkyDome';
 
 import { MODELS } from './models';
 
@@ -26,6 +29,7 @@ const VILLAS: Record<string, { title: string; spawn: [number, number, number] }>
 
 type Mode = 'pano' | 'walk' | 'complex';
 const NO_HUD = new URLSearchParams(location.search).has('nohud'); // чистый кадр для съёмки
+const NO_POST = new URLSearchParams(location.search).has('nopost'); // без постобработки (AO, bloom)
 
 export default function App() {
   const [villaId, setVillaId] = useState<keyof typeof VILLAS>(() => {
@@ -42,6 +46,7 @@ export default function App() {
   const stageLabel = cStage.startsWith('data') ? 'данные участка' : cStage.startsWith('instances') ? 'дома и интерьеры' : cStage === 'terrain:start' ? 'рельеф и газон' : cStage === 'terrain:paths' ? 'дорожки и растения' : cStage === 'terrain:done' ? '' : 'модели вилл';
   const complexLoading = mode === 'complex' && cStage !== 'terrain:done';
   const ambient = useAmbient(mode === 'complex' && !complexLoading);
+  const lowQ = useQuality();
   const [gl, setGl] = useState<WebGLRenderer | null>(null);
   const villa = VILLAS[villaId];
   const tour = PANO_TOURS[villaId] ?? [];
@@ -95,10 +100,15 @@ export default function App() {
             </Suspense>
             <hemisphereLight args={['#cfe3f5', '#b9b39f', 0.9]} />
             <ambientLight intensity={0.35} />
-            <directionalLight position={[SUN.x * 220, SUN.y * 220, SUN.z * 220]} color="#fff1d8" intensity={2.8} castShadow shadow-bias={-0.0004} shadow-normalBias={0.06}
-              shadow-mapSize={input.mobile ? [2048, 2048] : [4096, 4096]} shadow-camera-left={-170} shadow-camera-right={170} shadow-camera-top={170}
-              shadow-camera-bottom={-170} shadow-camera-near={20} shadow-camera-far={700} />
+            <ComplexSun walk={complexWalk} mobile={input.mobile} />
             <Suspense fallback={null}><ComplexScene walk={complexWalk} /></Suspense>
+            <QualityWatch active={!complexLoading && colliderState !== 'building'} />
+            {!input.mobile && !NO_POST && !lowQ && (
+              <EffectComposer multisampling={4} enableNormalPass={false}>
+                <N8AO aoRadius={1.4} intensity={1.5} distanceFalloff={1.0} halfRes />
+                <Bloom luminanceThreshold={0.92} intensity={0.22} mipmapBlur radius={0.6} />
+              </EffectComposer>
+            )}
             <Capture />
           </>
         ) : mode === 'walk' ? (
