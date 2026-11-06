@@ -1,12 +1,18 @@
 // Небо комплекса: солнце (общее для неба и света), дымка, облака-спрайты из процедурной текстуры.
 // (drei <Clouds> с текстурой-data-URL подвешивал загрузку всей сцены, поэтому облака свои.)
 import { useMemo } from 'react';
-import { Sky } from '@react-three/drei';
+import { Environment, Sky } from '@react-three/drei';
 import { CanvasTexture, SpriteMaterial, Vector3 } from 'three';
 import { makeCloudCanvas } from './textures';
+import { asset } from '../assets';
+
+/** HDRI-небо Poly Haven (CC0, public/hdri/sky_2k.hdr): фон и отражения в стекле/воде. ?prosky — старое процедурное. */
+const HDRI = !new URLSearchParams(location.search).has('prosky');
 
 /** Положение солнца: юго-запад, ~32° над горизонтом — тёплый предвечерний свет, длинные тени. */
 export const SUN = new Vector3(-0.55, 0.62, 0.55).normalize();
+/** Поворот HDRI, чтобы солнце панорамы совпало с направлением SUN (подобрано по кадру). */
+const SKY_ROT = 2.35;
 
 function rng(seed: number) { return () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }; }
 
@@ -27,9 +33,11 @@ export function SkyDome() {
   }, []);
   return (
     <>
-      <Sky distance={45000} sunPosition={[SUN.x * 100, SUN.y * 100, SUN.z * 100]} turbidity={3.5} rayleigh={1.6} mieCoefficient={0.004} mieDirectionalG={0.86} />
+      {HDRI
+        ? <Environment files={asset('hdri/sky_2k.hdr')} background backgroundBlurriness={0} backgroundIntensity={1.0} environmentIntensity={0.55} backgroundRotation={[0, SKY_ROT, 0]} environmentRotation={[0, SKY_ROT, 0]} />
+        : <Sky distance={45000} sunPosition={[SUN.x * 100, SUN.y * 100, SUN.z * 100]} turbidity={3.5} rayleigh={1.6} mieCoefficient={0.004} mieDirectionalG={0.86} />}
       <fogExp2 attach="fog" args={['#dbe7ee', 0.00038]} />
-      {puffs.map((p, i) => <sprite key={i} position={p.pos} scale={[p.s[0], p.s[1], 1]} material={mats[p.m]} renderOrder={-1} />)}
+      {!HDRI && puffs.map((p, i) => <sprite key={i} position={p.pos} scale={[p.s[0], p.s[1], 1]} material={mats[p.m]} renderOrder={-1} />)}
     </>
   );
 }

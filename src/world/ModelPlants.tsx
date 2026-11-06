@@ -1,0 +1,48 @@
+// Растения из glTF-моделей (CC0 Quaternius, public/models/nature/*.glb): инстансирование по мешам модели —
+// у каждого меша (ствол, листва…) свой InstancedMesh с теми же матрицами экземпляров × матрица меша внутри модели.
+// Высота модели нормируется: place() даёт позицию/поворот/желаемую высоту в метрах.
+import { useEffect, useMemo, useRef } from 'react';
+import { useGLTF } from '@react-three/drei';
+import { Box3, DoubleSide, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
+import type { Plant } from './Vegetation';
+
+export type Placement = { x: number; y: number; z: number; yaw: number; height: number; lean?: number; leanDir?: number };
+export type ModelPlantsProps = { url: string; items: Plant[]; place: (p: Plant) => Placement; castShadow?: boolean };
+
+const up = new Vector3(0, 1, 0);
+
+export function ModelPlants({ url, items, place, castShadow = true }: ModelPlantsProps) {
+  const gltf = useGLTF(url) as unknown as { scene: Object3D };
+  const parts = useMemo(() => {
+    gltf.scene.updateMatrixWorld(true);
+    const box = new Box3().setFromObject(gltf.scene); const h = Math.max(0.01, box.max.y - box.min.y); const base = box.min.y;
+    const list: { geometry: Mesh['geometry']; material: MeshStandardMaterial; local: Matrix4 }[] = [];
+    gltf.scene.traverse((o) => {
+      const m = o as Mesh; if (!m.isMesh) return;
+      const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as MeshStandardMaterial;
+      const mm = mat.clone(); mm.side = DoubleSide; if ('alphaTest' in mm && mm.transparent) { mm.alphaTest = 0.5; mm.transparent = false; }
+      list.push({ geometry: m.geometry, material: mm, local: m.matrixWorld.clone() });
+    });
+    return { list, h, base };
+  }, [gltf]);
+  const refs = useRef<(InstancedMesh | null)[]>([]);
+  useEffect(() => {
+    const m = new Matrix4(), q = new Quaternion(), pos = new Vector3(), scl = new Vector3(), tilt = new Quaternion();
+    items.forEach((p, i) => {
+      const pl = place(p); const s = pl.height / parts.h;
+      q.setFromAxisAngle(up, pl.yaw);
+      if (pl.lean) { tilt.setFromAxisAngle(new Vector3(Math.cos(pl.leanDir ?? 0), 0, Math.sin(pl.leanDir ?? 0)), pl.lean); q.premultiply(tilt); }
+      m.compose(pos.set(pl.x, pl.y - parts.base * s, pl.z), q, scl.set(s, s, s));
+      parts.list.forEach((part, k) => { const im = refs.current[k]; if (!im) return; im.setMatrixAt(i, new Matrix4().multiplyMatrices(m, part.local)); });
+    });
+    for (const im of refs.current) { if (!im) continue; im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); }
+  }, [items, place, parts]);
+  if (!items.length) return null;
+  return (
+    <>
+      {parts.list.map((part, k) => (
+        <instancedMesh key={k} ref={(el) => { refs.current[k] = el; }} args={[part.geometry, part.material, items.length]} castShadow={castShadow} receiveShadow frustumCulled={false} />
+      ))}
+    </>
+  );
+}

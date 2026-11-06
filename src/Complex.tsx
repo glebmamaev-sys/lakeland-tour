@@ -1,7 +1,7 @@
 // Сцена всего комплекса Lake Land: 12 строений по генплану 053-ГП (23.10.2026), рельеф участка по горизонталям,
 // окрестности: рельеф SRTM 4×4 км, лагуна Мавелла и океан, дома и деревья вокруг (OpenStreetMap).
 // Данные готовит aps/tools/genplan_*.py → public/complex/. Оси: x — восток, z — юг, y — отметка генплана.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useThree } from '@react-three/fiber';
 import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
@@ -24,6 +24,7 @@ import { furnishVilla, glassBoxes, waterBoxes } from './world/Interiors';
 import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
 import { Grass } from './world/Grass';
+import { ModelPlants } from './world/ModelPlants';
 import { useQuality } from './world/Quality';
 import { input } from './input';
 import { loadPlan } from './plan';
@@ -66,6 +67,12 @@ function setStage(name: string) {
 /** Точка старта пешей прогулки: у въезда рядом с магазином, взгляд на ряд вилл. */
 const WALK_SPAWN_XZ: [number, number] = [-36, -34];
 const LOD_FAR = 65;
+const PROVEG = new URLSearchParams(location.search).has('proveg'); // процедурная растительность вместо моделей Kenney
+// расстановка моделей растений: высота в метрах, поворот и наклон из параметров Plant (s, r)
+const placePalm = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r * 6.28, height: 8 + p.s * 6, lean: (p.r - 0.5) * 0.18, leanDir: p.s * 6.28 });
+const placePalmShort = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r * 6.28, height: 5 + p.s * 3, lean: (p.r - 0.5) * 0.12, leanDir: p.s * 6.28 });
+const placeBush = (p: Plant) => ({ x: p.x, y: p.y + 0.1, z: p.z, yaw: p.r * 6.28, height: 0.7 + p.s * 0.9 });
+const placeTree = (p: Plant) => ({ x: p.x, y: p.y + 0.05, z: p.z, yaw: p.r * 6.28, height: 4 + p.s * 2.5 });
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
 type BuiltScene = { site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
@@ -718,7 +725,19 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           </>
         )}
       </group>
-      {built && <><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>}
+      {built && (PROVEG
+        ? <><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>
+        : <Suspense fallback={<><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>}>
+            {/* модели Kenney Nature Kit (CC0): пальмы трёх видов (ближние), кусты трёх видов, деревья вместо франжипани; дальние пальмы — процедурные */}
+            <ModelPlants url={asset('models/nature/tree_palmDetailedTall.glb')} items={built.near.filter((_, i) => i % 3 === 0)} place={placePalm} />
+            <ModelPlants url={asset('models/nature/tree_palmBend.glb')} items={built.near.filter((_, i) => i % 3 === 1)} place={placePalm} />
+            <ModelPlants url={asset('models/nature/tree_palmDetailedShort.glb')} items={built.near.filter((_, i) => i % 3 === 2)} place={placePalmShort} />
+            <Palms near={[]} far={built.far} />
+            <ModelPlants url={asset('models/nature/plant_bushDetailed.glb')} items={built.shrubs.filter((_, i) => i % 3 === 0)} place={placeBush} castShadow={false} />
+            <ModelPlants url={asset('models/nature/plant_bushLarge.glb')} items={built.shrubs.filter((_, i) => i % 3 === 1)} place={placeBush} castShadow={false} />
+            <ModelPlants url={asset('models/nature/plant_bush.glb')} items={built.shrubs.filter((_, i) => i % 3 === 2)} place={placeBush} castShadow={false} />
+            <ModelPlants url={asset('models/nature/tree_detailed.glb')} items={built.frangipani} place={placeTree} />
+          </Suspense>)}
       {data && <Lagoon level={data.c.water_level} />}
       {built && complexStore.heightAt && !lowQ && !new URLSearchParams(location.search).has('nograss') && <Grass heightAt={complexStore.heightAt} ok={built.grassOk} count={Number(new URLSearchParams(location.search).get('grass')) || (input.mobile ? 15_000 : 45_000)} radius={input.mobile ? 18 : 26} />}
       {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} idlers={shopObj ? [shopObj.userData.receptionistWorld as { x: number; y: number; z: number; yaw: number }] : []} />}

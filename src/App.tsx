@@ -96,7 +96,7 @@ export default function App() {
           <>
             {new URLSearchParams(location.search).has('oldsky') ? <Sky sunPosition={[60, 35, 80]} turbidity={6} rayleigh={1.5} /> : <Suspense fallback={null}><SkyDome /></Suspense>}
             <Suspense fallback={null}>
-              <Environment preset="park" background={false} environmentIntensity={0.45} />
+              {new URLSearchParams(location.search).has('prosky') && <Environment preset="park" background={false} environmentIntensity={0.45} />}
             </Suspense>
             <hemisphereLight args={['#cfe3f5', '#b9b39f', 0.9]} />
             <ambientLight intensity={0.35} />
