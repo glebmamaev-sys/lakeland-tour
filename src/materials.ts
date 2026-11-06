@@ -203,7 +203,7 @@ export function cutTriangles(mesh: Mesh, cuts: PlanRect[]): Mesh | null {
  * (виллы 2.x и 3), стены и шторы (белый меш вилл 2.x).
  */
 /** Связные компоненты геометрии: вершины склеены по совпадающим координатам, треугольники объединяют вершины. */
-function labelComponents(g: BufferGeometry) {
+export function labelComponents(g: BufferGeometry) {
   const pos = g.getAttribute('position') as BufferAttribute;
   const idx = g.index;
   const triCount = idx ? idx.count / 3 : pos.count / 3;

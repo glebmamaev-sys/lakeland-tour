@@ -19,7 +19,10 @@ import { Player } from './Player';
 import { Frangipani, Palms, Shrubs, type Plant } from './world/Vegetation';
 import { Lagoon } from './world/Lagoon';
 import { buildPathNetwork, distToPaths, pathRibbon, type PathNet } from './world/Paths';
-import { makeNoiseTexture } from './world/textures';
+import { makeArtTexture, makeNoiseTexture } from './world/textures';
+import { furnishVilla, glassBoxes } from './world/Interiors';
+import { loadPlan } from './plan';
+import type { Plan } from './plan';
 
 /** Дом на генплане для карты комплекса и телепорта: контур в мире (x,z), матрица дома, точка входа. */
 export type HouseInfo = {
@@ -41,6 +44,8 @@ let complexCollider: Collider | null = null; // кэш между заходам
 
 /** Точка старта пешей прогулки: у въезда рядом с магазином, взгляд на ряд вилл. */
 const WALK_SPAWN_XZ: [number, number] = [-36, -34];
+let artTexture: ReturnType<typeof makeArtTexture> | null = null;
+export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
 
 type Placement = { id: string; model: string; floor: number; rot: number; pos: [number, number]; size?: [number, number] };
@@ -65,7 +70,7 @@ function inPoly(x: number, z: number, poly: [number, number][]) {
 
 /** Загрузка JSON и двух бинарных сеток высот. */
 function useComplexData() {
-  const [d, setD] = useState<{ c: ComplexData; site: Float32Array; dem: Float32Array; water: Uint8Array; land: Float32Array; cover: Uint8Array | null } | null>(null);
+  const [d, setD] = useState<{ c: ComplexData; site: Float32Array; dem: Float32Array; water: Uint8Array; land: Float32Array; cover: Uint8Array | null; plans: Record<string, Plan | null> } | null>(null);
   useEffect(() => {
     let alive = true;
     Promise.all([
@@ -75,7 +80,8 @@ function useComplexData() {
       fetch(asset('complex/water_mask.bin')).then((r) => r.arrayBuffer()),
       fetch(asset('complex/land_h.bin')).then((r) => r.arrayBuffer()),
       fetch(asset('complex/landcover.bin')).then((r) => (r.ok && !(r.headers.get('content-type') || '').includes('text/html') ? r.arrayBuffer() : null)).catch(() => null),
-    ]).then(([c, s, dm, wm, lh, lc]) => { (window as unknown as { __stage: string }).__stage = 'data:' + (alive ? 'set' : 'stale'); if (alive) setD({ c, site: new Float32Array(s), dem: new Float32Array(dm), water: new Uint8Array(wm), land: new Float32Array(lh), cover: lc ? new Uint8Array(lc) : null }); }).catch((e) => { (window as unknown as { __stage: string }).__stage = 'data:error ' + e; });
+      Promise.all(MODEL_IDS.map((id) => loadPlan(id))),
+    ]).then(([c, s, dm, wm, lh, lc, plans]) => { (window as unknown as { __stage: string }).__stage = 'data:' + (alive ? 'set' : 'stale'); if (alive) setD({ c, site: new Float32Array(s), dem: new Float32Array(dm), water: new Uint8Array(wm), land: new Float32Array(lh), cover: lc ? new Uint8Array(lc) : null, plans: Object.fromEntries(MODEL_IDS.map((id, k) => [id, plans[k]])) }); }).catch((e) => { (window as unknown as { __stage: string }).__stage = 'data:error ' + e; });
     return () => { alive = false; };
   }, []);
   return d;
@@ -154,6 +160,14 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       g.scene.updateMatrixWorld(true); applyMaterialRules(g.scene, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint });
       const t0 = performance.now(); const nd = openDoors(g.scene, cfg0.passages ?? []); // двери открыты: полотна в проёмах убраны
       if (nd) console.info('[openDoors]', MODEL_IDS[k], nd, 'tris removed in', (performance.now() - t0) | 0, 'ms');
+      // интерьеры по стайл-гайду: мебель в координатах виллы, кладём внутрь шаблона (клоны домов её наследуют)
+      const plan = data.plans[MODEL_IDS[k]];
+      if (plan && !g.scene.getObjectByName('furniture')) {
+        const t1 = performance.now();
+        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex());
+        furn.applyMatrix4(g.scene.matrixWorld.clone().invert()); g.scene.add(furn); g.scene.updateMatrixWorld(true);
+        console.info('[furniture]', MODEL_IDS[k], furn.children.map((m) => ((m as Mesh).geometry.getAttribute('position').count / 3) | 0), 'tris in', (performance.now() - t1) | 0, 'ms');
+      }
       if (!groundBVH.current.has(MODEL_IDS[k])) {
         const gc = buildColliderFromParts(collectColliderParts(g.scene, [], undefined, (m) => m.userData.role !== 'ground' && m.userData.role !== 'terrain'));
         if (gc) groundBVH.current.set(MODEL_IDS[k], gc);
@@ -253,38 +267,52 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       return out;
     };
     h.set(blur(blur(h, 4), 4)); // 2 прохода по 2 м — складки уходят, общий уклон остаётся
-    // 2) вокруг каждого дома газон повторяет проектную отметку земли самой виллы (скрытые меши ground/terrain модели):
-    //    полностью в полосе BLEND_FULL м от контура дома, дальше плавно (smoothstep) к рельефу генплана до BLEND_R м.
-    //    Так фундамент не уходит под землю и нет насыпей у стен; соседние дома усредняются по весам.
+    // 2) вертикальная планировка по посадке зданий: у каждого дома площадка (полоса PAD м от контура стен) на
+    //    проектной отметке земли самой виллы (скрытые меши ground/terrain модели, BVH на тип виллы) — она
+    //    зафиксирована; между площадками рельеф не круче MAX_SLOPE (итеративное ограничение уклона от площадок),
+    //    так земля не наезжает на стены и нет обрывов между домами с разной отметкой.
     {
-      const BLEND_FULL = 8, BLEND_R = 22;
-      const accW = new Float32Array(nx * nz), accY = new Float32Array(nx * nz); // ближайший дом (максимальный вес) задаёт отметку
+      const PAD = 3.5, MAX_SLOPE = 0.25; // 1:4
+      const fixed = new Uint8Array(nx * nz);
       const ray = new Ray(), lp = new Vector3(), inv = new Matrix4();
       for (const inst of instances) {
         const id = inst.name.slice('house-'.length);
         const hi = houses.find((x) => x.id === id); const gb = hi && groundBVH.current.get(hi.model);
         if (!hi || !gb) continue;
-        inv.copy(inst.matrixWorld).invert(); // BVH шаблона — в координатах виллы (как в прогулке) = локальных координатах дома
+        inv.copy(inst.matrixWorld).invert();
         const [fx0, fz0, fx1, fz1] = hi.fp;
         const box = new Box3();
-        for (const [x, z] of [[fx0 - BLEND_R, fz0 - BLEND_R], [fx1 + BLEND_R, fz0 - BLEND_R], [fx1 + BLEND_R, fz1 + BLEND_R], [fx0 - BLEND_R, fz1 + BLEND_R]])
+        for (const [x, z] of [[fx0 - PAD, fz0 - PAD], [fx1 + PAD, fz0 - PAD], [fx1 + PAD, fz1 + PAD], [fx0 - PAD, fz1 + PAD]])
           box.expandByPoint(inst.localToWorld(new Vector3(x, 0, z)));
         const i0 = Math.max(0, Math.floor((box.min.x - x0) / step)), i1 = Math.min(nx - 1, Math.ceil((box.max.x - x0) / step));
         const j0 = Math.max(0, Math.floor((box.min.z - z0) / step)), j1 = Math.min(nz - 1, Math.ceil((box.max.z - z0) / step));
         for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
           const x = x0 + i * step, z = z0 + j * step;
           lp.set(x, 0, z); inst.worldToLocal(lp);
-          const dx = Math.max(fx0 - lp.x, 0, lp.x - fx1), dz = Math.max(fz0 - lp.z, 0, lp.z - fz1);
-          const d = Math.hypot(dx, dz); if (d >= BLEND_R) continue;
-          const t = Math.max(0, (d - BLEND_FULL) / (BLEND_R - BLEND_FULL)); const w = 1 - t * t * (3 - 2 * t);
-          // луч вниз в координатах виллы (BVH построен один раз на тип виллы)
+          if (lp.x < fx0 - PAD || lp.x > fx1 + PAD || lp.z < fz0 - PAD || lp.z > fz1 + PAD) continue;
           ray.origin.set(x, 80, z).applyMatrix4(inv); ray.direction.set(0, -1, 0).transformDirection(inv);
           const hits = gb.bvh.raycast(ray, DoubleSide); if (!hits.length) continue;
           let top = -Infinity; for (const ht of hits) top = Math.max(top, 80 - ht.distance);
-          const k = j * nx + i; if (w > accW[k]) { accW[k] = w; accY[k] = top; }
+          const k = j * nx + i; h[k] = top; fixed[k] = 1;
         }
       }
-      for (let k = 0; k < nx * nz; k++) if (accW[k] > 0) h[k] = h[k] * (1 - accW[k]) + accY[k] * accW[k];
+      // ограничение уклона: каждая незафиксированная клетка не выше/ниже соседей ± MAX_SLOPE·шаг; повторяем, пока меняется
+      const d = MAX_SLOPE * step;
+      for (let pass = 0; pass < 80; pass++) {
+        let changed = 0;
+        for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+          const k = j * nx + i; if (fixed[k]) continue;
+          let lo = -Infinity, hiV = Infinity;
+          if (i > 0) { lo = Math.max(lo, h[k - 1] - d); hiV = Math.min(hiV, h[k - 1] + d); }
+          if (i < nx - 1) { lo = Math.max(lo, h[k + 1] - d); hiV = Math.min(hiV, h[k + 1] + d); }
+          if (j > 0) { lo = Math.max(lo, h[k - nx] - d); hiV = Math.min(hiV, h[k - nx] + d); }
+          if (j < nz - 1) { lo = Math.max(lo, h[k + nx] - d); hiV = Math.min(hiV, h[k + nx] + d); }
+          const v = Math.min(hiV, Math.max(lo, h[k])); if (Math.abs(v - h[k]) > 1e-4) { h[k] = v; changed++; }
+        }
+        if (!changed) break;
+      }
+      // лёгкое сглаживание вне площадок
+      const sm = blur(h, 2); for (let k = 0; k < nx * nz; k++) if (!fixed[k]) h[k] = sm[k];
     }
     // вырезка: под каждым домом земля не выше самой нижней поверхности модели — только внутри пятна стен
     // (без запаса 1,2 м: иначе свесы крыш и террас прорезают траншею вокруг дома)

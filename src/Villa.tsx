@@ -9,6 +9,9 @@ import { PlaceholderVilla } from './PlaceholderVilla';
 import { MODELS } from './models';
 import { applyMaterialRules, openDoors } from './materials';
 import { asset } from './assets';
+import { loadPlan } from './plan';
+import { debugPlanImage, furnishVilla, glassBoxes } from './world/Interiors';
+import { artTex } from './Complex';
 
 const hiddenMat = new MeshBasicMaterial({ visible: false });
 
@@ -95,8 +98,16 @@ function GlbVilla({ id, onLoaded }: { id: string; onLoaded: () => void }) {
     (window as unknown as { __helpers: unknown }).__helpers = helpers;
     // сцена смонтирована — можно строить коллайдер (на следующий кадр, когда обновятся матрицы)
     const r = requestAnimationFrame(onLoaded);
-    return () => cancelAnimationFrame(r);
-  }, [scene, tex, onLoaded, cfg.title, cfg.paint]);
+    // интерьеры по стайл-гайду (координаты виллы — как helpers, рядом со сценой); после добавления коллайдер пересобирается
+    let alive = true;
+    loadPlan(id).then((plan) => {
+      if (!alive || !plan || parent.getObjectByName('furniture')) return;
+      const gb = glassBoxes(scene); const furn = furnishVilla(plan, gb, cfg.passages ?? [], artTex());
+      parent.add(furn); furn.updateMatrixWorld(true); onLoaded();
+      if (import.meta.env.DEV && new URLSearchParams(location.search).has('plandebug')) void debugPlanImage(id, plan, gb, cfg.passages ?? []);
+    });
+    return () => { alive = false; cancelAnimationFrame(r); };
+  }, [scene, tex, onLoaded, cfg.title, cfg.paint, cfg.passages, id]);
   return <primitive object={scene} rotation={cfg.rotation} position={cfg.offset} />;
 }
 

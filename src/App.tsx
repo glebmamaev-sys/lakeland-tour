@@ -27,11 +27,13 @@ type Mode = 'pano' | 'walk' | 'complex';
 const NO_HUD = new URLSearchParams(location.search).has('nohud'); // чистый кадр для съёмки
 
 export default function App() {
-  const [villaId, setVillaId] = useState<keyof typeof VILLAS>('villa1');
-  const [mode, setMode] = useState<Mode>('pano');
+  const [villaId, setVillaId] = useState<keyof typeof VILLAS>(() => {
+    const v = new URLSearchParams(location.search).get('villa'); return v && v in VILLAS ? (v as keyof typeof VILLAS) : 'villa1';
+  });
+  const [mode, setMode] = useState<Mode>(() => { const m = new URLSearchParams(location.search).get('mode'); return m === 'walk' || m === 'complex' ? m : 'pano'; });
   const [status, setStatus] = useState<'loading' | 'placeholder' | 'model'>('loading');
   const [locked, setLocked] = useState(false);
-  const [complexWalk, setComplexWalk] = useState(false); // «Комплекс»: с дрона (орбита) или пешком
+  const [complexWalk, setComplexWalk] = useState(() => new URLSearchParams(location.search).has('walk')); // «Комплекс»: с дрона (орбита) или пешком
   const [colliderState, setColliderState] = useState(complexStore.collider);
   const [gl, setGl] = useState<WebGLRenderer | null>(null);
   const villa = VILLAS[villaId];
@@ -113,7 +115,7 @@ export default function App() {
               shadow-camera-bottom={-30}
             />
             <Villa key={`villa-${villaId}`} id={villaId} onReady={onReady} />
-            <RoomLabels villaId={villaId} />
+            {!NO_HUD && <RoomLabels villaId={villaId} />}
             <Capture />
             <Player
               key={`player-${villaId}`}
@@ -194,7 +196,7 @@ export default function App() {
         {mode === 'complex' && complexWalk && input.mobile && <div className="hud-bottom">Левый джойстик — ходить · правая половина экрана — смотреть</div>}
         {mode === 'pano' && <div className="hud-hint">Тяните, чтобы осмотреться · колесо — зум · кружки — переход в соседнюю комнату</div>}
       </div>
-      {mode === 'walk' && status === 'model' && <Minimap villaId={villaId} />}
+      {mode === 'walk' && status === 'model' && !NO_HUD && <Minimap villaId={villaId} />}
       {mode === 'complex' && complexWalk && !NO_HUD && <ComplexMap />}
       {((mode === 'walk') || (mode === 'complex' && complexWalk)) && input.mobile && <Joystick />}
     </>

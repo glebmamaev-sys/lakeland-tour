@@ -63,3 +63,22 @@ export function makeNoiseTexture(n = 256, seed = 3): CanvasTexture {
   ctx.putImageData(img, 0, 0);
   const t = new CanvasTexture(c); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; return t;
 }
+
+/** Две абстрактные картины в земляных тонах (охра, уголь, песок) рядом: 1024×512, каждому холсту половина. */
+export function makeArtTexture(): CanvasTexture {
+  const W = 1024, H = 512; const c = document.createElement('canvas'); c.width = W; c.height = H; const ctx = c.getContext('2d')!;
+  const r = rng(41);
+  for (let k = 0; k < 2; k++) {
+    const x0 = k * W / 2; ctx.fillStyle = k ? '#e9e2d2' : '#ddd3bf'; ctx.fillRect(x0, 0, W / 2, H);
+    const pal = ['#b7792f', '#8b5a2b', '#3a3836', '#d8c9a8', '#6b5a48', '#c9a66b'];
+    for (let i = 0; i < 26; i++) {
+      ctx.fillStyle = pal[Math.floor(r() * pal.length)]; ctx.globalAlpha = 0.35 + r() * 0.5;
+      const w = 40 + r() * 220, h = 20 + r() * 160; const x = x0 + r() * (W / 2 - w), y = r() * (H - h);
+      ctx.save(); ctx.translate(x + w / 2, y + h / 2); ctx.rotate((r() - 0.5) * 0.5); ctx.beginPath(); ctx.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    }
+    ctx.globalAlpha = 0.9; ctx.strokeStyle = '#2f2d2b'; ctx.lineWidth = 3;
+    for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.moveTo(x0 + r() * W / 2, r() * H); ctx.bezierCurveTo(x0 + r() * W / 2, r() * H, x0 + r() * W / 2, r() * H, x0 + r() * W / 2, r() * H); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+  }
+  const t = new CanvasTexture(c); t.colorSpace = SRGBColorSpace; return t;
+}
