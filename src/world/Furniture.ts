@@ -96,9 +96,9 @@ export function pottedPlant(kind: 'strelitzia' | 'kentia' = 'strelitzia', seed =
   p.push(col(new CylinderGeometry(0.2, 0.2, 0.03, 10).translate(0, 0.41, 0), '#5a4a3a'));
   const n = kind === 'strelitzia' ? 9 : 14;
   for (let k = 0; k < n; k++) {
-    const a = (k / n) * Math.PI * 2 + r() * 0.5; const len = kind === 'strelitzia' ? 0.9 + r() * 0.5 : 1.1 + r() * 0.5;
+    const a = (k / n) * Math.PI * 2 + r() * 0.5; const len = kind === 'strelitzia' ? 0.6 + r() * 0.35 : 0.75 + r() * 0.35;
     const stem = new BoxGeometry(0.015, len, 0.015); stem.translate(0, len / 2, 0);
-    const leaf = new PlaneGeometry(kind === 'strelitzia' ? 0.3 : 0.1, kind === 'strelitzia' ? 0.6 : 0.9); leaf.translate(0, len + (kind === 'strelitzia' ? 0.25 : 0.35), 0);
+    const leaf = new PlaneGeometry(kind === 'strelitzia' ? 0.22 : 0.08, kind === 'strelitzia' ? 0.42 : 0.6); leaf.translate(0, len + (kind === 'strelitzia' ? 0.18 : 0.25), 0);
     const g = merge([col(stem, C.leaf), col(leaf, k % 2 ? C.leaf : C.leafLight, 0.08, k)]);
     g.rotateX(0.35 + r() * 0.35); g.rotateY(a); g.translate(0, 0.42, 0); p.push(g);
   }
@@ -165,7 +165,7 @@ export function lounger(): BufferGeometry {
 }
 export function planter(seed = 1): BufferGeometry {
   const p: BufferGeometry[] = [col(new CylinderGeometry(0.42, 0.34, 0.7, 12).translate(0, 0.35, 0), C.terracotta)];
-  const plant = pottedPlant(seed % 2 ? 'strelitzia' : 'kentia', seed); plant.scale(1.3, 1.3, 1.3); plant.translate(0, 0.3, 0); p.push(plant);
+  const plant = pottedPlant(seed % 2 ? 'strelitzia' : 'kentia', seed); plant.scale(0.8, 0.75, 0.8); plant.translate(0, 0.3, 0); p.push(plant);
   return merge(p);
 }
 

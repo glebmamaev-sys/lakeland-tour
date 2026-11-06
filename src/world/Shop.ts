@@ -9,6 +9,7 @@ import {
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import * as F from './Furniture';
 import { box, col, merge, C } from './Furniture';
+import { applyDetailMaps, type DetailMaps } from './textures';
 
 const WALL_H = 3.4, T = 0.25;
 
@@ -102,7 +103,7 @@ function fruitStand(seed: number): BufferGeometry[] {
   return p;
 }
 
-export type ShopTextures = { stucco: Texture; stuccoN?: Texture; stone2: Texture; walnut: Texture };
+export type ShopTextures = { stucco: Texture; stuccoN?: Texture; stone2: Texture; walnut: Texture; detail?: DetailMaps };
 
 /** Строит магазин. W×D — пятно по генплану; groundDrop — на сколько земля у двери ниже пола (для пандуса). */
 export function buildShop(W: number, D: number, tex: ShopTextures, groundDrop = 0.1): Group {
@@ -175,7 +176,7 @@ export function buildShop(W: number, D: number, tex: ShopTextures, groundDrop = 
 
   // --- меши ---
   const mk = (parts: BufferGeometry[], mat: MeshStandardMaterial, name: string, shadow = true) => { if (!parts.length) return; const m = new Mesh(merge(parts), mat); m.name = name; m.castShadow = shadow; m.receiveShadow = true; g.add(m); return m; };
-  mk(matte, new MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: DoubleSide }), 'shop-matte');
+  { const m = new MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: DoubleSide }); if (tex.detail) applyDetailMaps(m, tex.detail); mk(matte, m, 'shop-matte'); }
   mk(glow, new MeshStandardMaterial({ vertexColors: true, roughness: 1, emissive: '#ffffff', emissiveIntensity: 0.9 }), 'shop-glow', false);
   const stucco = tex.stucco.clone(); stucco.wrapS = stucco.wrapT = RepeatWrapping; stucco.repeat.set(3, 1.2); stucco.needsUpdate = true;
   const wallMesh = new Mesh(mergeGeometries(walls, false)!, new MeshStandardMaterial({ map: stucco, normalMap: tex.stuccoN, roughness: 0.95, color: '#f2ede4' }));

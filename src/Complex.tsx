@@ -7,7 +7,7 @@ import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, ExtrudeGeometry,
   Float32BufferAttribute, Group, LOD, Matrix4, Mesh, MeshStandardMaterial,
-  Ray, RepeatWrapping, Shape, SRGBColorSpace, Vector3,
+  PlaneGeometry, Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { applyMaterialRules, openDoors } from './materials';
@@ -19,7 +19,7 @@ import { Player } from './Player';
 import { Frangipani, Palms, Shrubs, type Plant } from './world/Vegetation';
 import { Lagoon } from './world/Lagoon';
 import { buildPathNetwork, distToPaths, pathRibbon, type PathNet } from './world/Paths';
-import { makeArtTexture, makeNoiseTexture } from './world/textures';
+import { makeArtTexture, makeNoiseTexture, makeWeaveTexture, type DetailMaps } from './world/textures';
 import { furnishVilla, glassBoxes } from './world/Interiors';
 import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
@@ -43,6 +43,13 @@ export const complexStore: {
   collider: 'none' | 'building' | 'ready';
 } = { data: null, houses: [], heightAt: null, collider: 'none' };
 let complexCollider: Collider | null = null;
+let detailCache: DetailMaps | null = null;
+/** Карты деталей мебели: дерево — текстура ореха Романа (повтор), ткань — процедурное переплетение. */
+export function detailMaps(walnut: Texture): DetailMaps {
+  if (detailCache) return detailCache;
+  const wood = walnut.clone(); wood.wrapS = wood.wrapT = RepeatWrapping; wood.needsUpdate = true;
+  detailCache = { wood, fabric: makeWeaveTexture() }; return detailCache;
+}
 let builtCache: { data: NonNullable<ReturnType<typeof useComplexData>>; built: BuiltScene; heightAt: (x: number, z: number) => number | null } | null = null; // рельеф/растения между заходами
 /** Этап загрузки комплекса (для индикатора и замеров): window.__stage, window.__stageTimes. */
 const stageTimes: Record<string, number> = {};
@@ -57,7 +64,7 @@ function setStage(name: string) {
 const WALK_SPAWN_XZ: [number, number] = [-36, -34];
 const LOD_FAR = 65;
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
-type BuiltScene = { site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet }; // м: дальше этого дом рисуется упрощённой копией
+type BuiltScene = { site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
@@ -180,7 +187,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const plan = data.plans[MODEL_IDS[k]];
       if (plan && !g.scene.getObjectByName('furniture')) {
         const t1 = performance.now();
-        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex());
+        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex(), detailMaps(tex.walnut));
         furn.applyMatrix4(g.scene.matrixWorld.clone().invert()); g.scene.add(furn); g.scene.updateMatrixWorld(true);
         console.info('[furniture]', MODEL_IDS[k], furn.children.map((m) => ((m as Mesh).geometry.getAttribute('position').count / 3) | 0), 'tris in', (performance.now() - t1) | 0, 'ms');
       }
@@ -290,6 +297,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     };
     const W = c.water_level;
     const h = Float32Array.from(site);
+    let gradeFixed: Uint8Array | null = null; let inHouseMask: Uint8Array | null = null;
     const { x0, z0, step, nx, nz } = c.site;
     // 1) сглаживание рельефа с генплана: горизонтали дают террасы-«складки», газон должен быть ровным
     const blur = (src: Float32Array, r: number) => {
@@ -304,14 +312,19 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     //    зафиксирована; между площадками рельеф не круче MAX_SLOPE (итеративное ограничение уклона от площадок),
     //    так земля не наезжает на стены и нет обрывов между домами с разной отметкой.
     {
-      const PAD = 3.5, MAX_SLOPE = 0.25; // 1:4
+      const PAD = 3.0, MAX_SLOPE = 0.25; // 1:4
       const fixed = new Uint8Array(nx * nz);
       const ray = new Ray(), lp = new Vector3(), inv = new Matrix4();
+      // отметка площадки относительно пола дома (локальный y=0): плоские виллы 2.x — ровно пол, вилла 3 — рельеф
+      // Revit в пределах [нижний уровень −3,4; верх +0,2], вилла 1 (ступенчатая) — рельеф Revit в [−0,15; +10,2].
+      // Раньше брался «верх» рельефа Revit как есть — у 2.x он на 1–2 м выше пола (окна уходили в землю)
+      const PAD_RANGE: Record<string, [number, number] | null> = { villa21: null, villa22: null, villa3: [-3.4, 0.2], villa1: [-0.15, 10.2] };
+      inHouseMask = new Uint8Array(nx * nz);
       for (const inst of instances) {
         const id = inst.name.slice('house-'.length);
         const hi = houses.find((x) => x.id === id); const gb = hi && groundBVH.current.get(hi.model);
         if (!hi || !gb) continue;
-        inv.copy(inst.matrixWorld).invert();
+        inv.copy(inst.matrixWorld).invert(); const range = PAD_RANGE[hi.model] ?? null; const floorY = inst.position.y;
         const [fx0, fz0, fx1, fz1] = hi.fp;
         const box = new Box3();
         for (const [x, z] of [[fx0 - PAD, fz0 - PAD], [fx1 + PAD, fz0 - PAD], [fx1 + PAD, fz1 + PAD], [fx0 - PAD, fz1 + PAD]])
@@ -322,15 +335,30 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           const x = x0 + i * step, z = z0 + j * step;
           lp.set(x, 0, z); inst.worldToLocal(lp);
           if (lp.x < fx0 - PAD || lp.x > fx1 + PAD || lp.z < fz0 - PAD || lp.z > fz1 + PAD) continue;
-          ray.origin.set(x, 80, z).applyMatrix4(inv); ray.direction.set(0, -1, 0).transformDirection(inv);
-          const hits = gb.bvh.raycast(ray, DoubleSide); if (!hits.length) continue;
-          let top = -Infinity; for (const ht of hits) top = Math.max(top, 80 - ht.distance);
-          const k = j * nx + i; h[k] = top; fixed[k] = 1;
+          const k = j * nx + i; let top = floorY - 0.05;
+          if (lp.x > fx0 - 0.4 && lp.x < fx1 + 0.4 && lp.z > fz0 - 0.4 && lp.z < fz1 + 0.4) inHouseMask[k] = 1;
+          if (range) {
+            ray.origin.set(x, 80, z).applyMatrix4(inv); ray.direction.set(0, -1, 0).transformDirection(inv);
+            const hits = gb.bvh.raycast(ray, DoubleSide); if (!hits.length) continue;
+            top = -Infinity; for (const ht of hits) top = Math.max(top, 80 - ht.distance);
+            top = Math.min(floorY + range[1], Math.max(floorY + range[0], top));
+          }
+          h[k] = fixed[k] ? Math.min(h[k], top) : top; fixed[k] = 1; // стык двух площадок — по нижней
         }
       }
+      // выемка под бассейнами и прудами: земля ниже дна воды (вилла 3 стоит в пруду — иначе вода «лужей» у стен)
+      // водные меши вилл шире видимых чаш (прямоугольные плоскости): вне пятна дома земля не ниже уровня воды + 0,15,
+      // иначе плоскость воды проступает «лужей» у стен; сами чаши — в модели дома и в выемке под пятном
+      for (const b of pools) {
+        const i0 = Math.max(0, Math.floor((b.min.x - 0.5 - x0) / step)), i1 = Math.min(nx - 1, Math.ceil((b.max.x + 0.5 - x0) / step));
+        const j0 = Math.max(0, Math.floor((b.min.z - 0.5 - z0) / step)), j1 = Math.min(nz - 1, Math.ceil((b.max.z + 0.5 - z0) / step));
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const k = j * nx + i; if (inHouseMask![k] || fixed[k]) continue; h[k] = Math.max(h[k], b.max.y + 0.15); fixed[k] = 1; }
+      }
+      // лёгкое сглаживание вне площадок — до ограничения уклона, чтобы не вернуть крутизну у их края
+      { const sm = blur(h, 2); for (let k = 0; k < nx * nz; k++) if (!fixed[k]) h[k] = sm[k]; }
       // ограничение уклона: каждая незафиксированная клетка не выше/ниже соседей ± MAX_SLOPE·шаг; повторяем, пока меняется
       const d = MAX_SLOPE * step;
-      for (let pass = 0; pass < 80; pass++) {
+      for (let pass = 0; pass < 400; pass++) {
         let changed = 0;
         for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
           const k = j * nx + i; if (fixed[k]) continue;
@@ -343,8 +371,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         }
         if (!changed) break;
       }
-      // лёгкое сглаживание вне площадок
-      const sm = blur(h, 2); for (let k = 0; k < nx * nz; k++) if (!fixed[k]) h[k] = sm[k];
+      gradeFixed = fixed;
     }
     // вырезка: под каждым домом земля не выше самой нижней поверхности модели — только внутри пятна стен
     // (без запаса 1,2 м: иначе свесы крыш и террас прорезают траншею вокруг дома)
@@ -383,13 +410,24 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         }
         return Math.sqrt(best);
       };
+      void EDGE; void distToBoundary;
+      const outFixed = new Uint8Array(nx * nz);
       for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
         const x = x0 + i * step, z = z0 + j * step, k = j * nx + i;
-        if (!inPoly(x, z, B)) { h[k] = waterAt(x, z) ? W - 0.6 : Math.min(h[k], demLand(x, z)); continue; }
-        const d = distToBoundary(x, z); if (d >= EDGE) continue;
-        const outside = waterAt(x, z) ? W - 0.6 : demLand(x, z);
-        const t = d / EDGE, w = t * t * (3 - 2 * t); // 0 на границе → 1 в глубине участка
-        h[k] = outside * (1 - w) + h[k] * w;
+        if (inPoly(x, z, B)) { outFixed[k] = 1; continue; }
+        if (waterAt(x, z)) { h[k] = W - 0.6; outFixed[k] = 1; } else h[k] = Math.min(h[k], demLand(x, z));
+      }
+      // ограничение уклона снаружи: земля окрестностей плавно поднимается к краю участка (внутри всё зафиксировано)
+      const d = 0.3 * step;
+      for (let pass = 0; pass < 400; pass++) {
+        let changed = 0;
+        for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+          const k = j * nx + i; if (outFixed[k]) continue;
+          let lo = -Infinity, hiV = Infinity;
+          lo = Math.max(lo, h[k - 1] - d, h[k + 1] - d, h[k - nx] - d, h[k + nx] - d); hiV = Math.min(hiV, h[k - 1] + d, h[k + 1] + d, h[k - nx] + d, h[k + nx] + d);
+          const v = Math.min(hiV, Math.max(lo, h[k])); if (Math.abs(v - h[k]) > 1e-4) { h[k] = v; changed++; }
+        }
+        if (!changed) break;
       }
     }
     // меш участка
@@ -439,6 +477,24 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       g.rotateX(-Math.PI / 2); g.translate(0, y - 0.3, 0); hg.push(g);
     }
     const nbHouses = hg.length ? mergeGeometries(hg, true) : null;
+    // подпорные стенки: там, где две площадки разной отметки стыкуются (перепад между соседними клетками > 0,35 м),
+    // вертикальная грань из камня — террасы вместо травяных обрывов
+    const wq: BufferGeometry[] = [];
+    if (gradeFixed && inHouseMask) for (let j = 0; j < nz - 1; j++) for (let i = 0; i < nx - 1; i++) {
+      const k = j * nx + i; const x = x0 + i * step, z = z0 + j * step;
+      if (!inPoly(x, z, c.site.boundary) && !inPoly(x0 + (i + 1) * step, z0 + (j + 1) * step, c.site.boundary)) continue;
+      for (const [k2, dx] of [[k + 1, 1], [k + nx, 0]] as [number, number][]) {
+        if (inHouseMask[k] || inHouseMask[k2]) continue;
+        const dh = h[k2] - h[k]; if (Math.abs(dh) < 0.35) continue;
+        const lo = Math.min(h[k], h[k2]) - 0.3, hiY = Math.max(h[k], h[k2]) + 0.02;
+        const g = new PlaneGeometry(step, hiY - lo); // вертикальная грань между центрами клеток
+        if (dx) { g.rotateY(dh > 0 ? -Math.PI / 2 : Math.PI / 2); g.translate(x + step / 2, (lo + hiY) / 2, z); }
+        else { if (dh < 0) g.rotateY(Math.PI); g.translate(x, (lo + hiY) / 2, z + step / 2); }
+        const uv = g.getAttribute('uv'); for (let q = 0; q < uv.count; q++) uv.setXY(q, uv.getX(q) * step / 1.5, uv.getY(q) * (hiY - lo) / 1.5);
+        wq.push(g);
+      }
+    }
+    const walls = wq.length ? mergeGeometries(wq, false) : null;
     // дорожки: сеть по генплану (въезд → проезд между 2.x → дорога ряда 1.x → вилла 3), ленты 2,6 м по рельефу
     setStage('terrain:paths');
     const net = buildPathNetwork(houses, WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]);
@@ -489,7 +545,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       }
     }
     setStage('terrain:done');
-    const builtNow = { site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
+    const builtNow = { site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
     (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses };
   }, [data, instances, houses]);
@@ -533,15 +589,19 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
   // магазин у въезда: достроен процедурно (Shop.ts), фасадом к старту прогулки, пол по рельефу у двери
   const shopObj = useMemo(() => {
     const hAt = complexStore.heightAt; if (!shop || !built || !hAt) return null;
-    const W = shop.size?.[0] ?? 9.5, D = shop.size?.[1] ?? 8.5;
+    let W = shop.size?.[0] ?? 9.5, D = shop.size?.[1] ?? 8.5;
+    // вход — по указанию заказчика: стена справа от прежнего стеклянного фасада (прежний фасад смотрел к старту прогулки),
+    // то есть поворот на +90°; при нечётном повороте относительно пятна генплана ширина и глубина меняются местами
     const toSpawn = Math.atan2(WALK_SPAWN_XZ[0] - shop.pos[0], WALK_SPAWN_XZ[1] - shop.pos[1]);
-    const yaw = [0, 1, 2, 3].map((k) => -shop.rot + k * Math.PI / 2).sort((a, b) => Math.cos(b - toSpawn) - Math.cos(a - toSpawn))[0];
+    const yaw0 = [0, 1, 2, 3].map((k) => -shop.rot + k * Math.PI / 2).sort((a, b) => Math.cos(b - toSpawn) - Math.cos(a - toSpawn))[0];
+    const yaw = yaw0 + Math.PI / 2;
+    const kq = ((Math.round((yaw + shop.rot) / (Math.PI / 2)) % 4) + 4) % 4; if (kq % 2) { const t = W; W = D; D = t; }
     const fx = Math.sin(yaw), fz = Math.cos(yaw);
     const door = hAt(shop.pos[0] + fx * (D / 2 + 1.2), shop.pos[1] + fz * (D / 2 + 1.2)) ?? shop.floor;
     const front = hAt(shop.pos[0] + fx * (D / 2 + 3), shop.pos[1] + fz * (D / 2 + 3)) ?? door;
     const centre = hAt(shop.pos[0], shop.pos[1]) ?? door;
     const y = Math.max(door, centre) + 0.12;
-    const g = buildShop(W, D, { stucco: tex.stucco, stuccoN: tex.stuccoN, stone2: tex.stone2, walnut: tex.walnut }, Math.max(0.05, y - front));
+    const g = buildShop(W, D, { stucco: tex.stucco, stuccoN: tex.stuccoN, stone2: tex.stone2, walnut: tex.walnut, detail: detailMaps(tex.walnut) }, Math.max(0.05, y - front));
     g.position.set(shop.pos[0], y, shop.pos[1]); g.rotation.y = yaw; g.updateMatrixWorld(true);
     const rp = (g.userData.receptionist as Vector3).clone().applyMatrix4(g.matrixWorld);
     g.userData.receptionistWorld = { x: rp.x, y: rp.y, z: rp.z, yaw: yaw }; // смотрит к входу (+z локально)
@@ -569,6 +629,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
   const demMat = useMemo(() => grassVary(new MeshStandardMaterial({ map: siteMat.map, vertexColors: true, roughness: 1 }), 0.006), [siteMat]);
   const roofMat = useMemo(() => new MeshStandardMaterial({ color: '#b5674a', roughness: 0.9 }), []);
   const wallMat = useMemo(() => new MeshStandardMaterial({ color: '#efe9de', roughness: 0.95 }), []);
+  const retMat = useMemo(() => { const t = tex.wallstone.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.needsUpdate = true;
+    return new MeshStandardMaterial({ map: t, color: '#cfc6b4', roughness: 0.95, side: DoubleSide }); }, [tex.wallstone]);
   const pathMat = useMemo(() => { const t = tex.stone2.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.repeat.set(1, 1); t.needsUpdate = true;
     return new MeshStandardMaterial({ map: t, color: '#d8d2c4', roughness: 0.9, side: DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }); }, [tex.stone2]);
 
@@ -598,6 +660,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
             <mesh geometry={built.dem} material={demMat} receiveShadow />
             {built.houses && <mesh geometry={built.houses} material={[roofMat, wallMat]} castShadow receiveShadow />}
             {built.paths && <mesh geometry={built.paths} material={pathMat} receiveShadow />}
+            {built.walls && <mesh geometry={built.walls} material={retMat} castShadow receiveShadow />}
           </>
         )}
       </group>

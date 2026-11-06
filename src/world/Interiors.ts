@@ -6,6 +6,7 @@ import type { Plan, PlanLevel } from '../plan';
 import type { Passage } from '../models';
 import { labelComponents } from '../materials';
 import * as F from './Furniture';
+import { applyDetailMaps, type DetailMaps } from './textures';
 
 type Rect = { x0: number; z0: number; x1: number; z1: number };
 type Side = 'px' | 'nx' | 'pz' | 'nz';
@@ -223,12 +224,13 @@ function furnishTerrace(p: Placer, r: RoomInfo, seed: number) {
     p.put(F.sofa(2.2, 3), r.cx - n.x * 1.1, r.cz - n.z * 1.1, yaw, 2.2, 0.95) && p.put(F.coffeeTable(1.0, 0.6), r.cx + n.x * 0.3, r.cz + n.z * 0.3, yaw, 1.0, 0.6);
     p.put(F.rug(3.0, 2.6, F.C.jute), r.cx, r.cz, yaw, 3.0, 2.6, p.matte, 0.3);
   }
-  const corners = [[r.rect.x0 + 0.6, r.rect.z0 + 0.6], [r.rect.x1 - 0.6, r.rect.z1 - 0.6]];
-  corners.forEach(([x, z], i) => p.put(F.planter(seed + i), x, z, 0, 0.9, 0.9));
+  if (W < 1.8 || D < 1.8) return; // узкий балкон/проход — без кадок (кадка на парапете или у лестницы)
+  const corners = [[r.rect.x0 + 0.75, r.rect.z0 + 0.75], [r.rect.x1 - 0.75, r.rect.z1 - 0.75]];
+  corners.forEach(([x, z], i) => p.put(F.planter(seed + i), x, z, 0, 0.9, 0.9, p.matte, 0.0));
 }
 
 /** Собирает мебель всей виллы: Group из трёх мешей (матовая мебель, абажуры, холсты). */
-export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], artTexture: Texture): Group {
+export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], artTexture: Texture, detail?: DetailMaps): Group {
   const matte: BufferGeometry[] = [], shade: BufferGeometry[] = [], art: BufferGeometry[] = [];
   const dbg: unknown[] = []; (window as unknown as { __rooms: unknown }).__rooms = dbg;
   let seed = 1;
@@ -284,7 +286,7 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
   }
   const g = new Group(); g.name = 'furniture';
   const mk = (parts: BufferGeometry[], mat: MeshStandardMaterial, name: string) => { if (!parts.length) return; const m = new Mesh(F.merge(parts), mat); m.name = name; m.castShadow = true; m.receiveShadow = true; m.userData.role = 'furniture'; g.add(m); };
-  mk(matte, new MeshStandardMaterial({ vertexColors: true, roughness: 0.88, side: DoubleSide }), 'furniture-matte');
+  { const m = new MeshStandardMaterial({ vertexColors: true, roughness: 0.88, side: DoubleSide }); if (detail) applyDetailMaps(m, detail); mk(matte, m, 'furniture-matte'); }
   mk(shade, new MeshStandardMaterial({ vertexColors: true, roughness: 1, side: DoubleSide, emissive: '#ffd6a0', emissiveIntensity: 0.55 }), 'furniture-shades');
   // холсты: UV в [0,1] по картине — текстура из двух работ, каждому холсту своя половина
   if (art.length) {

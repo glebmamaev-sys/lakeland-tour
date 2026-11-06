@@ -11,7 +11,7 @@ import { applyMaterialRules, openDoors } from './materials';
 import { asset } from './assets';
 import { loadPlan } from './plan';
 import { debugPlanImage, furnishVilla, glassBoxes } from './world/Interiors';
-import { artTex } from './Complex';
+import { artTex , detailMaps } from './Complex';
 
 const hiddenMat = new MeshBasicMaterial({ visible: false });
 
@@ -102,7 +102,7 @@ function GlbVilla({ id, onLoaded }: { id: string; onLoaded: () => void }) {
     let alive = true;
     loadPlan(id).then((plan) => {
       if (!alive || !plan || parent.getObjectByName('furniture')) return;
-      const gb = glassBoxes(scene); const furn = furnishVilla(plan, gb, cfg.passages ?? [], artTex());
+      const gb = glassBoxes(scene); const furn = furnishVilla(plan, gb, cfg.passages ?? [], artTex(), detailMaps(tex.walnut));
       parent.add(furn); furn.updateMatrixWorld(true); onLoaded();
       if (import.meta.env.DEV && new URLSearchParams(location.search).has('plandebug')) void debugPlanImage(id, plan, gb, cfg.passages ?? []);
     });

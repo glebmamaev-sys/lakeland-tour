@@ -1,5 +1,5 @@
 // Процедурные текстуры мира (без скачивания чужих файлов): облака, нормали воды, шум для вариации газона.
-import { CanvasTexture, RepeatWrapping, SRGBColorSpace, LinearFilter, LinearMipmapLinearFilter } from 'three';
+import { CanvasTexture, RepeatWrapping, SRGBColorSpace, LinearFilter, LinearMipmapLinearFilter, type MeshStandardMaterial, type Texture } from 'three';
 
 function rng(seed: number) { return () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }; }
 
@@ -81,4 +81,46 @@ export function makeArtTexture(): CanvasTexture {
     ctx.globalAlpha = 1;
   }
   const t = new CanvasTexture(c); t.colorSpace = SRGBColorSpace; return t;
+}
+
+/** Мелкое переплетение ткани (лён/джут): бесшовная серая текстура с нитями по двум осям и шумом. */
+export function makeWeaveTexture(n = 256, seed = 9): CanvasTexture {
+  const f = noiseField(n, 3, seed);
+  const c = document.createElement('canvas'); c.width = c.height = n;
+  const ctx = c.getContext('2d')!; const img = ctx.createImageData(n, n);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const wx = 0.5 + 0.5 * Math.sin((x / n) * Math.PI * 2 * 48), wy = 0.5 + 0.5 * Math.sin((y / n) * Math.PI * 2 * 48);
+    const v = (0.72 + 0.16 * Math.max(wx, wy) + (f[y * n + x] - 0.5) * 0.25) * 255; const i = (y * n + x) * 4;
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new CanvasTexture(c); t.wrapS = t.wrapT = RepeatWrapping; t.minFilter = LinearMipmapLinearFilter; t.magFilter = LinearFilter; return t;
+}
+
+export type DetailMaps = { wood: Texture; fabric: Texture };
+/** Накладывает на материал с вершинными цветами текстуру-деталь: коричневые тона (дерево, ротанг, терракота)
+ *  получают рисунок дерева, остальные (лён, джут, полосы, кожа) — переплетение ткани. UV — по мировым координатам
+ *  (трипланарно по доминирующей нормали), так что плотность одинаковая на любой детали. */
+export function applyDetailMaps(m: MeshStandardMaterial, maps: DetailMaps, woodScale = 0.9, fabricScale = 6) {
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uWood = { value: maps.wood }; sh.uniforms.uFabric = { value: maps.fabric };
+    sh.uniforms.uWoodScale = { value: woodScale }; sh.uniforms.uFabricScale = { value: fabricScale };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vDPos; varying vec3 vDNrm;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvDPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vDNrm = normalize(mat3(modelMatrix) * objectNormal);');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vDPos; varying vec3 vDNrm; uniform sampler2D uWood; uniform sampler2D uFabric; uniform float uWoodScale; uniform float uFabricScale;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          vec3 an = abs(vDNrm); vec2 duv = an.y > an.x && an.y > an.z ? vDPos.xz : (an.x > an.z ? vDPos.zy : vDPos.xy);
+          vec3 c = diffuseColor.rgb; float mx = max(c.r, max(c.g, c.b)); float mn = min(c.r, min(c.g, c.b)); float sat = (mx - mn) / max(mx, 1e-3);
+          bool woodish = c.r > c.g && c.g >= c.b && sat > 0.3 && mx < 0.85;
+          bool greenish = c.g > c.r && c.g > c.b; bool dark = mx < 0.22;
+          if (!greenish && !dark) {
+            if (woodish) { float w = texture2D(uWood, duv * uWoodScale).g; diffuseColor.rgb *= mix(0.72, 1.18, w); }
+            else { float f = texture2D(uFabric, duv * uFabricScale).r; diffuseColor.rgb *= mix(0.9, 1.06, f); }
+          }
+        }`);
+  };
+  m.needsUpdate = true;
 }
