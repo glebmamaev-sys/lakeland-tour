@@ -325,16 +325,17 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         const hi = houses.find((x) => x.id === id); const gb = hi && groundBVH.current.get(hi.model);
         if (!hi || !gb) continue;
         inv.copy(inst.matrixWorld).invert(); const range = PAD_RANGE[hi.model] ?? null; const floorY = inst.position.y;
+        const PADW = hi.model === 'villa3' ? 0.9 : PAD; // у виллы 3 (заглублённый нижний уровень) фиксируем только 0,9 м у стен — дальше гладкий склон
         const [fx0, fz0, fx1, fz1] = hi.fp;
         const box = new Box3();
-        for (const [x, z] of [[fx0 - PAD, fz0 - PAD], [fx1 + PAD, fz0 - PAD], [fx1 + PAD, fz1 + PAD], [fx0 - PAD, fz1 + PAD]])
+        for (const [x, z] of [[fx0 - PADW, fz0 - PADW], [fx1 + PADW, fz0 - PADW], [fx1 + PADW, fz1 + PADW], [fx0 - PADW, fz1 + PADW]])
           box.expandByPoint(inst.localToWorld(new Vector3(x, 0, z)));
         const i0 = Math.max(0, Math.floor((box.min.x - x0) / step)), i1 = Math.min(nx - 1, Math.ceil((box.max.x - x0) / step));
         const j0 = Math.max(0, Math.floor((box.min.z - z0) / step)), j1 = Math.min(nz - 1, Math.ceil((box.max.z - z0) / step));
         for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
           const x = x0 + i * step, z = z0 + j * step;
           lp.set(x, 0, z); inst.worldToLocal(lp);
-          if (lp.x < fx0 - PAD || lp.x > fx1 + PAD || lp.z < fz0 - PAD || lp.z > fz1 + PAD) continue;
+          if (lp.x < fx0 - PADW || lp.x > fx1 + PADW || lp.z < fz0 - PADW || lp.z > fz1 + PADW) continue;
           const k = j * nx + i; let top = floorY - 0.05;
           if (lp.x > fx0 - 0.4 && lp.x < fx1 + 0.4 && lp.z > fz0 - 0.4 && lp.z < fz1 + 0.4) inHouseMask[k] = 1;
           if (range) {
