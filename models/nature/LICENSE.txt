@@ -1,0 +1,2 @@
+Растения: Kenney «Nature Kit» 2.1 (kenney.nl/assets/nature-kit), лицензия CC0 1.0. Скачано 06.11.2026 с зеркала OpenGameArt
+(opengameart.org/content/nature-kit, «Nature Kit (2.1).zip»), здесь — выбранные GLB из папки «GLTF format», сжаты gltf-transform meshopt.
