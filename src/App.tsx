@@ -9,6 +9,7 @@ import { input } from './input';
 import { PANO_TOURS } from './panos';
 import { PanoScene } from './PanoScene';
 import { VRButton } from './VRButton';
+import { useAmbient } from './Ambient';
 import { Minimap } from './Minimap';
 import { RoomLabels } from './RoomLabels';
 import { Capture } from './Capture';
@@ -40,6 +41,7 @@ export default function App() {
   useEffect(() => { const l = (v: string) => setCStage(v); complexStage.listeners.add(l); return () => { complexStage.listeners.delete(l); }; }, []);
   const stageLabel = cStage.startsWith('data') ? 'данные участка' : cStage.startsWith('instances') ? 'дома и интерьеры' : cStage === 'terrain:start' ? 'рельеф и газон' : cStage === 'terrain:paths' ? 'дорожки и растения' : cStage === 'terrain:done' ? '' : 'модели вилл';
   const complexLoading = mode === 'complex' && cStage !== 'terrain:done';
+  const ambient = useAmbient(mode === 'complex' && !complexLoading);
   const [gl, setGl] = useState<WebGLRenderer | null>(null);
   const villa = VILLAS[villaId];
   const tour = PANO_TOURS[villaId] ?? [];
@@ -160,6 +162,7 @@ export default function App() {
             <button className={mode === 'complex' ? 'on' : ''} onClick={() => switchMode('complex')}>Комплекс</button>
           </div>
           {mode === 'pano' && <VRButton gl={gl} />}
+          {mode === 'complex' && <button className={'sound' + (ambient.on ? ' on' : '')} onClick={ambient.toggle} title={ambient.on ? 'Выключить звук' : 'Включить звук'}>{ambient.on ? '🔊' : '🔇'}</button>}
           {mode === 'complex' && (
             <div className="seg">
               <button className={!complexWalk ? 'on' : ''} onClick={() => { if (document.pointerLockElement) document.exitPointerLock(); setComplexWalk(false); }}>С дрона</button>
