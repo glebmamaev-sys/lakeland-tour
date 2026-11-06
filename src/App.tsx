@@ -14,6 +14,7 @@ import { RoomLabels } from './RoomLabels';
 import { Capture } from './Capture';
 import { ComplexScene, complexStore } from './Complex';
 import { ComplexMap } from './ComplexMap';
+import { SkyDome, SUN } from './world/SkyDome';
 
 import { MODELS } from './models';
 
@@ -79,15 +80,15 @@ export default function App() {
       >
         {mode === 'complex' ? (
           <>
-            <Sky sunPosition={[60, 35, 80]} turbidity={6} rayleigh={1.5} />
+            {new URLSearchParams(location.search).has('oldsky') ? <Sky sunPosition={[60, 35, 80]} turbidity={6} rayleigh={1.5} /> : <Suspense fallback={null}><SkyDome /></Suspense>}
             <Suspense fallback={null}>
-              <Environment preset="park" background={false} environmentIntensity={0.4} />
+              <Environment preset="park" background={false} environmentIntensity={0.45} />
             </Suspense>
-            <hemisphereLight args={['#dfefff', '#cfcbc3', 1.0]} />
-            <ambientLight intensity={0.55} />
-            <directionalLight position={[120, 90, 160]} intensity={2.6} castShadow shadow-bias={-0.0005} shadow-normalBias={0.05}
-              shadow-mapSize={[4096, 4096]} shadow-camera-left={-160} shadow-camera-right={160} shadow-camera-top={160}
-              shadow-camera-bottom={-160} shadow-camera-far={600} />
+            <hemisphereLight args={['#cfe3f5', '#b9b39f', 0.9]} />
+            <ambientLight intensity={0.35} />
+            <directionalLight position={[SUN.x * 220, SUN.y * 220, SUN.z * 220]} color="#fff1d8" intensity={2.8} castShadow shadow-bias={-0.0004} shadow-normalBias={0.06}
+              shadow-mapSize={[4096, 4096]} shadow-camera-left={-170} shadow-camera-right={170} shadow-camera-top={170}
+              shadow-camera-bottom={-170} shadow-camera-near={20} shadow-camera-far={700} />
             <Suspense fallback={null}><ComplexScene walk={complexWalk} /></Suspense>
             <Capture />
           </>
