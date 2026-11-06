@@ -20,7 +20,7 @@ import { Frangipani, Palms, Shrubs, type Plant } from './world/Vegetation';
 import { Lagoon } from './world/Lagoon';
 import { buildPathNetwork, distToPaths, pathRibbon, type PathNet } from './world/Paths';
 import { makeArtTexture, makeNoiseTexture, makeWeaveTexture, type DetailMaps } from './world/textures';
-import { furnishVilla, glassBoxes } from './world/Interiors';
+import { furnishVilla, glassBoxes, waterBoxes } from './world/Interiors';
 import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
 import { loadPlan } from './plan';
@@ -187,7 +187,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const plan = data.plans[MODEL_IDS[k]];
       if (plan && !g.scene.getObjectByName('furniture')) {
         const t1 = performance.now();
-        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex(), detailMaps(tex.walnut));
+        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex(), detailMaps(tex.walnut), waterBoxes(g.scene));
         furn.applyMatrix4(g.scene.matrixWorld.clone().invert()); g.scene.add(furn); g.scene.updateMatrixWorld(true);
         console.info('[furniture]', MODEL_IDS[k], furn.children.map((m) => ((m as Mesh).geometry.getAttribute('position').count / 3) | 0), 'tris in', (performance.now() - t1) | 0, 'ms');
       }

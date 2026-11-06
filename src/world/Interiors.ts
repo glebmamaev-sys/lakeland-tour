@@ -230,7 +230,13 @@ function furnishTerrace(p: Placer, r: RoomInfo, seed: number) {
 }
 
 /** Собирает мебель всей виллы: Group из трёх мешей (матовая мебель, абажуры, холсты). */
-export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], artTexture: Texture, detail?: DetailMaps): Group {
+/** Коробки воды (бассейны, пруды) — мебель на них не ставим. */
+export function waterBoxes(root: Object3D): Box3[] {
+  const out: Box3[] = []; root.updateMatrixWorld(true);
+  root.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.userData.role === 'water') out.push(new Box3().setFromObject(m)); });
+  return out;
+}
+export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], artTexture: Texture, detail?: DetailMaps, water: Box3[] = []): Group {
   const matte: BufferGeometry[] = [], shade: BufferGeometry[] = [], art: BufferGeometry[] = [];
   const dbg: unknown[] = []; (window as unknown as { __rooms: unknown }).__rooms = dbg;
   let seed = 1;
@@ -267,9 +273,10 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
     }
     items.sort((p, q) => p.a - q.a);
     const claimed: Rect[] = service.slice();
+    for (const b of water) if (b.max.y > l.level - 1 && b.min.y < l.level + 1) claimed.push({ x0: b.min.x - 0.3, z0: b.min.z - 0.3, x1: b.max.x + 0.3, z1: b.max.z + 0.3 }); // вода этого уровня
     if (import.meta.env.DEV) (window as unknown as { __service: unknown[] }).__service = [...((window as unknown as { __service?: unknown[] }).__service ?? []), { level: l.level, service, rooms: l.rooms.map((r) => [r.name, r.area, +r.x.toFixed(1), +r.z.toFixed(1)]) }];
     for (const { room, kind, rect, a } of items) {
-      if (a < 0.5 || claimed.slice(service.length).some((c) => overlap(rect, c) > 0.7 * a)) continue;
+      if (a < 0.5 || claimed.slice(service.length + water.length).some((c) => overlap(rect, c) > 0.7 * a)) continue;
       const walls = rect;
       const info: RoomInfo = { name: room.name, kind, y: l.level, rect, cx: (rect.x0 + rect.x1) / 2, cz: (rect.z0 + rect.z1) / 2, area: room.area,
         glass: { px: glassOnSide(rect, l.level, 'px', glass), nx: glassOnSide(rect, l.level, 'nx', glass), pz: glassOnSide(rect, l.level, 'pz', glass), nz: glassOnSide(rect, l.level, 'nz', glass) } };
