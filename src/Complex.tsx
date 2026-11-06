@@ -22,6 +22,7 @@ import { buildPathNetwork, distToPaths, pathRibbon, type PathNet } from './world
 import { makeArtTexture, makeNoiseTexture } from './world/textures';
 import { furnishVilla, glassBoxes } from './world/Interiors';
 import { Npcs } from './world/Characters';
+import { buildShop } from './world/Shop';
 import { loadPlan } from './plan';
 import type { Plan } from './plan';
 
@@ -529,6 +530,24 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
 
   // магазин у въезда — простой объём 1 этаж
   const shop = data?.c.buildings.find((b) => b.model === 'shop');
+  // магазин у въезда: достроен процедурно (Shop.ts), фасадом к старту прогулки, пол по рельефу у двери
+  const shopObj = useMemo(() => {
+    const hAt = complexStore.heightAt; if (!shop || !built || !hAt) return null;
+    const W = shop.size?.[0] ?? 9.5, D = shop.size?.[1] ?? 8.5;
+    const toSpawn = Math.atan2(WALK_SPAWN_XZ[0] - shop.pos[0], WALK_SPAWN_XZ[1] - shop.pos[1]);
+    const yaw = [0, 1, 2, 3].map((k) => -shop.rot + k * Math.PI / 2).sort((a, b) => Math.cos(b - toSpawn) - Math.cos(a - toSpawn))[0];
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);
+    const door = hAt(shop.pos[0] + fx * (D / 2 + 1.2), shop.pos[1] + fz * (D / 2 + 1.2)) ?? shop.floor;
+    const front = hAt(shop.pos[0] + fx * (D / 2 + 3), shop.pos[1] + fz * (D / 2 + 3)) ?? door;
+    const centre = hAt(shop.pos[0], shop.pos[1]) ?? door;
+    const y = Math.max(door, centre) + 0.12;
+    const g = buildShop(W, D, { stucco: tex.stucco, stuccoN: tex.stuccoN, stone2: tex.stone2, walnut: tex.walnut }, Math.max(0.05, y - front));
+    g.position.set(shop.pos[0], y, shop.pos[1]); g.rotation.y = yaw; g.updateMatrixWorld(true);
+    const rp = (g.userData.receptionist as Vector3).clone().applyMatrix4(g.matrixWorld);
+    g.userData.receptionistWorld = { x: rp.x, y: rp.y, z: rp.z, yaw: yaw }; // смотрит к входу (+z локально)
+    shop.floor = y;
+    return g;
+  }, [shop, built, tex]);
   const grass = tex.grass;
   // газон: плитка травы + крупный шум (убирает повторы) через onBeforeCompile
   const grassVary = (m: MeshStandardMaterial, scale: number) => {
@@ -572,12 +591,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       {walk && built && <Player spawn={spawn} yaw={spawnYaw} />}
       <group ref={instRoot}>{instances.map((o) => <primitive key={o.name} object={o} />)}</group>
       <group ref={groundRoot}>
-        {shop && (
-          <mesh position={[shop.pos[0], shop.floor + 1.8, shop.pos[1]]} rotation={[0, -shop.rot, 0]} castShadow receiveShadow>
-            <boxGeometry args={[shop.size?.[0] ?? 9, 3.6, shop.size?.[1] ?? 8]} />
-            <meshStandardMaterial color="#f1ece2" roughness={0.9} />
-          </mesh>
-        )}
+        {shopObj && <primitive object={shopObj} />}
         {built && (
           <>
             <mesh geometry={built.site} material={siteMat} receiveShadow />
@@ -589,7 +603,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       </group>
       {built && <><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>}
       {data && <Lagoon level={data.c.water_level} />}
-      {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} />}
+      {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} idlers={shopObj ? [shopObj.userData.receptionistWorld as { x: number; y: number; z: number; yaw: number }] : []} />}
     </group>
   );
 }

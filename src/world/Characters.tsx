@@ -6,7 +6,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import { playerState } from '../Player';
-import { Box3, BoxGeometry, BufferGeometry, CylinderGeometry, DoubleSide, Group, Matrix4, Mesh, MeshStandardMaterial, SphereGeometry, Vector3 } from 'three';
+import { Box3, BoxGeometry, BufferAttribute, BufferGeometry, Color, CylinderGeometry, DoubleSide, Group, Matrix4, Mesh, MeshStandardMaterial, SphereGeometry, Vector3 } from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { box, col, merge, C } from './Furniture';
 import * as F from './Furniture';
 import { distToPaths, type PathNet } from './Paths';
@@ -21,41 +22,77 @@ const HAIR = ['#1d1612', '#2a1e16', '#3a2a1e', '#0f0d0c'];
 export type HumanOpts = { seed?: number; hat?: boolean; swimwear?: boolean };
 export type Human = { root: Group; body: Mesh; armL: Group; armR: Group; legL: Group; legR: Group; opts: HumanOpts; female: boolean };
 
-const MAT = new MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: DoubleSide });
+const MAT = new MeshStandardMaterial({ vertexColors: true, roughness: 0.72, side: DoubleSide });
 
 /** Собирает человека; limb-группы стоят в шарнирах (плечо y=1.42, бедро y=0.9). */
+/** Однотонная раскраска с сохранением индекса (гладкие нормали цилиндров и сфер остаются). */
+function colIdx(g: BufferGeometry, color: string): BufferGeometry {
+  const c = new Color(color); const n = g.getAttribute('position').count; const a = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
+  g.setAttribute('color', new BufferAttribute(a, 3)); return g;
+}
+/** Слияние индексированных частей без пересчёта нормалей — гладкие тела, рёбра только у коробок. */
+function mergeSmooth(parts: BufferGeometry[]): BufferGeometry { return mergeGeometries(parts, false)!; }
+const cylS = (rt: number, rb: number, h: number, color: string, x = 0, y = 0, z = 0, sz = 1, seg = 14) => { const g = new CylinderGeometry(rt, rb, h, seg); g.scale(1, 1, sz); g.translate(x, y + h / 2, z); return colIdx(g, color); };
+const sphS = (r: number, color: string, x: number, y: number, z: number, sx = 1, sy = 1, sz = 1, seg = 16) => { const g = new SphereGeometry(r, seg, Math.round(seg * 0.75)); g.scale(sx, sy, sz); g.translate(x, y, z); return colIdx(g, color); };
+const boxS = (w: number, h: number, d: number, color: string, x: number, y: number, z: number) => { const g = new BoxGeometry(w, h, d); g.translate(x, y, z); return colIdx(g, color); };
+const DRESS = ['#e8705f', '#7a9a6a', '#f4f1ea', '#b7792f', '#3b4a6b', '#d9a5b3'];
+
+/** Собирает человека: гладкие цилиндры и сферы, лицо (глаза, брови, нос, рот, уши), причёска, рубашка с воротником
+ *  и рукавами, шорты/брюки/платье, сандалии; limb-группы стоят в шарнирах (плечо y=1.42, бедро y=0.9). */
 export function makeHuman(opts: HumanOpts = {}): Human {
   const r = rng((opts.seed ?? 1) * 7919 + 17);
   const skin = SKIN[Math.floor(r() * SKIN.length)], shirt = SHIRT[Math.floor(r() * SHIRT.length)];
-  const pants = opts.swimwear ? PANTS[1] : PANTS[Math.floor(r() * PANTS.length)], hair = HAIR[Math.floor(r() * HAIR.length)];
+  const pants = opts.swimwear ? (r() < 0.5 ? '#3b4a6b' : '#c45f4a') : PANTS[Math.floor(r() * PANTS.length)], hair = HAIR[Math.floor(r() * HAIR.length)];
   const female = r() < 0.5; const tall = 0.94 + r() * 0.12;
+  const dress = female && !opts.swimwear && !opts.hat && r() < 0.55; const dressCol = DRESS[Math.floor(r() * DRESS.length)];
+  const shorts = !dress && (opts.swimwear || r() < 0.6); const longHair = female && r() < 0.7; const glasses = !opts.hat && r() < 0.25;
+  const skinDark = new Color(skin).multiplyScalar(0.82).getStyle();
   const root = new Group(); root.scale.setScalar(tall); root.rotation.order = 'YXZ'; // наклон (лежать/плыть) после поворота по курсу
-  // корпус: таз, торс, шея, голова, волосы/шляпа
-  const bodyParts: BufferGeometry[] = [];
-  bodyParts.push(box(0.34, 0.22, 0.2, pants, 0, 0.82, 0));                      // таз
-  if (opts.swimwear) bodyParts.push(box(0.36, 0.5, 0.22, skin, 0, 1.0, 0));    // торс голый
-  else bodyParts.push(box(female ? 0.36 : 0.42, 0.52, 0.22, shirt, 0, 1.0, 0)); // торс в рубашке
-  bodyParts.push(box(0.1, 0.08, 0.1, skin, 0, 1.52, 0));                        // шея
-  const head = new SphereGeometry(0.115, 10, 8); head.translate(0, 1.7, 0); bodyParts.push(col(head, skin, 0.02));
-  const hairG = new SphereGeometry(0.12, 10, 6, 0, Math.PI * 2, 0, Math.PI * (female ? 0.62 : 0.5)); hairG.translate(0, 1.71, -0.01); bodyParts.push(col(hairG, hair, 0.02));
-  if (female && !opts.hat) bodyParts.push(box(0.12, 0.3, 0.1, hair, 0, 1.4, -0.11, 0.02)); // хвост
-  if (opts.hat) { // широкополая соломенная шляпа садовника
-    const brim = new CylinderGeometry(0.3, 0.3, 0.02, 14); brim.translate(0, 1.78, 0); bodyParts.push(col(brim, C.rattan));
-    const top = new CylinderGeometry(0.12, 0.14, 0.12, 12); top.translate(0, 1.85, 0); bodyParts.push(col(top, C.rattan));
+  const bp: BufferGeometry[] = [];
+  // таз и торс
+  const topCol = opts.swimwear ? skin : dress ? dressCol : shirt;
+  bp.push(cylS(0.19, 0.17, 0.2, opts.swimwear || dress ? (dress ? dressCol : pants) : pants, 0, 0.78, 0, 0.62));
+  bp.push(cylS(female ? 0.19 : 0.21, 0.19, 0.52, topCol, 0, 0.96, 0, 0.62));
+  if (dress) bp.push(cylS(0.2, 0.33, 0.5, dressCol, 0, 0.32, 0, 0.7)); // юбка
+  if (opts.swimwear && female) bp.push(cylS(0.2, 0.2, 0.14, '#c45f4a', 0, 1.2, 0, 0.64)); // верх купальника
+  if (!opts.swimwear) bp.push(cylS(0.09, 0.075, 0.05, topCol, 0, 1.47, 0, 0.8)); // воротник
+  bp.push(cylS(0.05, 0.055, 0.1, skin, 0, 1.46, 0));                            // шея
+  // голова и лицо (лицом на +z)
+  bp.push(sphS(0.12, skin, 0, 1.7, 0, 1, 1.08, 1));
+  for (const sx of [-1, 1]) {
+    bp.push(sphS(0.026, skin, sx * 0.118, 1.7, -0.01, 0.5, 1, 1, 8));            // ухо
+    bp.push(sphS(0.022, '#f4f1ea', sx * 0.045, 1.72, 0.1, 1, 1, 0.6, 8));         // белок
+    bp.push(sphS(0.011, '#1d1612', sx * 0.045, 1.72, 0.115, 1, 1, 0.6, 8));       // зрачок
+    bp.push(boxS(0.05, 0.012, 0.012, hair, sx * 0.045, 1.757, 0.108));            // бровь
   }
-  const body = new Mesh(merge(bodyParts), MAT); body.castShadow = true;
+  bp.push(boxS(0.026, 0.045, 0.03, skinDark, 0, 1.695, 0.118));                   // нос
+  bp.push(boxS(0.05, 0.012, 0.012, '#8a4a3a', 0, 1.652, 0.11));                   // рот
+  if (glasses) { bp.push(boxS(0.15, 0.035, 0.02, '#1d1612', 0, 1.72, 0.112)); }     // солнечные очки
+  // причёска
+  const cap = new SphereGeometry(0.127, 16, 10, 0, Math.PI * 2, 0, Math.PI * (female ? 0.56 : 0.5)); cap.scale(1, 1.05, 1); cap.translate(0, 1.71, -0.012); bp.push(colIdx(cap, hair));
+  if (longHair && !opts.hat) bp.push(cylS(0.1, 0.085, 0.36, hair, 0, 1.36, -0.06, 0.55));  // длинные волосы сзади
+  else if (female && !opts.hat) bp.push(sphS(0.06, hair, 0, 1.76, -0.1, 1, 0.8, 1, 10));     // пучок
+  if (opts.hat) { // широкополая соломенная шляпа садовника
+    bp.push(cylS(0.3, 0.3, 0.02, C.rattan, 0, 1.78, 0)); bp.push(cylS(0.12, 0.14, 0.12, C.rattan, 0, 1.8, 0));
+  }
+  const body = new Mesh(mergeSmooth(bp), MAT); body.castShadow = true;
   root.add(body);
   // конечности: геометрия вниз от шарнира
-  const limb = (parts: BufferGeometry[], x: number, y: number) => { const g = new Group(); g.position.set(x, y, 0); const m = new Mesh(merge(parts), MAT); m.castShadow = true; g.add(m); return g; };
+  const limb = (parts: BufferGeometry[], x: number, y: number) => { const g = new Group(); g.position.set(x, y, 0); const m = new Mesh(mergeSmooth(parts), MAT); m.castShadow = true; g.add(m); return g; };
   const arm = (side: number) => limb([
-    box(0.1, 0.28, 0.1, opts.swimwear ? skin : shirt, 0, -0.28, 0),            // плечо (рукав)
-    box(0.09, 0.3, 0.09, skin, 0, -0.58, 0),                                   // предплечье
-    box(0.08, 0.1, 0.06, skin, 0, -0.66, 0.01),                                // кисть
-  ], side * 0.27, 1.42);
+    ...(opts.swimwear ? [] : [cylS(0.07, 0.062, 0.16, topCol, 0, -0.16, 0)]),      // короткий рукав
+    sphS(0.06, opts.swimwear ? skin : topCol, 0, -0.01, 0, 1, 0.8, 1, 10),         // плечо
+    cylS(0.052, 0.046, 0.3, skin, 0, -0.31, 0),                                     // плечо-рука
+    cylS(0.046, 0.04, 0.28, skin, 0, -0.6, 0),                                      // предплечье
+    sphS(0.045, skin, 0, -0.63, 0.01, 0.8, 1, 0.6, 10),                             // кисть
+  ], side * 0.26, 1.42);
   const leg = (side: number) => limb([
-    box(0.15, 0.42, 0.16, pants, 0, -0.44, 0),                                 // бедро (шорты/брюки)
-    box(0.13, 0.46, 0.13, opts.swimwear || r() < 0.5 ? skin : pants, 0, -0.9, 0), // голень
-    box(0.12, 0.05, 0.26, opts.swimwear ? skin : C.walnut, 0, -0.9, 0.05),     // ступня/сандалия
+    ...(dress ? [cylS(0.075, 0.065, 0.42, skin, 0, -0.44, 0)]
+      : shorts ? [cylS(0.085, 0.078, 0.3, pants, 0, -0.32, 0), cylS(0.07, 0.062, 0.14, skin, 0, -0.44, 0)]
+      : [cylS(0.085, 0.07, 0.44, pants, 0, -0.46, 0)]),
+    cylS(0.06, 0.045, 0.45, dress || shorts ? skin : pants, 0, -0.9, 0),            // голень
+    boxS(0.1, 0.035, 0.25, opts.swimwear ? skin : C.walnut, 0, -0.9, 0.05),         // сандалия
   ], side * 0.1, 0.9);
   const armL = arm(-1), armR = arm(1), legL = leg(-1), legR = leg(1);
   root.add(armL, armR, legL, legR);
@@ -166,6 +203,7 @@ type HouseLite = { fp: [number, number, number, number]; matrix: Matrix4 };
 type Walker = { h: Human; edge: number; from: number; t: number; speed: number; yaw: number; pause: number; greet: number; cool: number; leader?: number; side: number };
 type Sunbather = { h: Human; lounger: Mesh; x: number; y: number; z: number; yaw: number };
 type Waterer = { h: Human; can: Mesh; spots: Vector3[]; i: number; x: number; z: number; yaw: number; watering: number; greet: number; cool: number };
+type Idler = { h: Human; x: number; y: number; z: number; yaw: number; cur: number; greet: number; cool: number };
 type Bird = { root: Group; wl: Mesh; wr: Mesh; r: number; w: number; ph: number; y: number; cx: number; cz: number };
 type Swimmer = { h: Human; box: Box3; along: 'x' | 'z'; dir: number; pos: number; speed: number; y: number };
 type Gardener = { h: Human; mower: Mesh; rect: [number, number, number, number]; x: number; z: number; dir: number; row: number; speed: number; turning: number; yaw: number; greet: number; cool: number };
@@ -200,9 +238,9 @@ export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number
   return best?.rect ?? null;
 }
 
-export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shrubs = [], lagoon = [120, 0] }: {
+export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shrubs = [], lagoon = [120, 0], idlers = [] }: {
   net: PathNet; heightAt: (x: number, z: number) => number | null; houses: HouseLite[]; pools: Box3[]; inSite: (x: number, z: number) => boolean; audioBase?: string;
-  shrubs?: { x: number; y: number; z: number }[]; lagoon?: [number, number];
+  shrubs?: { x: number; y: number; z: number }[]; lagoon?: [number, number]; idlers?: { x: number; y: number; z: number; yaw: number }[];
 }) {
   const root = useRef<Group>(null);
   const state = useMemo(() => {
@@ -272,8 +310,10 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     const birds: Bird[] = [];
     for (let i = 0; i < 9; i++) { const b = makeBird(); birds.push({ ...b, r: 22 + r() * 30, w: (0.09 + r() * 0.05) * (i % 3 ? 1 : -1), ph: r() * Math.PI * 2, y: 28 + r() * 18, cx: lagoon[0] + (r() - 0.5) * 60, cz: lagoon[1] + (r() - 0.5) * 60 }); }
     (window as unknown as { __npcDbg: unknown }).__npcDbg = { distToHouses: (x: number, z: number) => distToHouses(houses, x, z), distToPaths: (x: number, z: number) => distToPaths(net, x, z) };
-    return { graph, walkers, swimmers, gardener, sunbathers, waterer, birds };
-  }, [net, heightAt, houses, pools, inSite, shrubs, lagoon]);
+    // стоящие персонажи (администратор за стойкой): стоят, здороваются, возвращаются к своему направлению
+    const standing: Idler[] = idlers.map((p, i) => ({ h: makeHuman({ seed: 900 + i }), x: p.x, y: p.y, z: p.z, yaw: p.yaw, cur: p.yaw, greet: 0, cool: 0 }));
+    return { graph, walkers, swimmers, gardener, sunbathers, waterer, birds, standing };
+  }, [net, heightAt, houses, pools, inSite, shrubs, lagoon, idlers]);
 
   useEffect(() => {
     const g = root.current; if (!g) return;
@@ -283,6 +323,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     for (const s of state.sunbathers) { g.add(s.h.root); g.add(s.lounger); }
     if (state.waterer) g.add(state.waterer.h.root);
     for (const b of state.birds) g.add(b.root);
+    for (const i of state.standing) g.add(i.h.root);
     (window as unknown as { __npcs: unknown }).__npcs = state;
     return () => { g.clear(); };
   }, [state]);
@@ -386,6 +427,13 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
       }
       const y = heightAt(wt.x, wt.z) ?? wt.h.root.position.y; wt.h.root.position.set(wt.x, y + 0.02, wt.z); wt.h.root.rotation.y = wt.yaw;
     }
+    for (const st of state.standing) {
+      st.cool = Math.max(0, st.cool - d);
+      if (st.greet <= 0 && tryGreet(st.h, st.cool, d)) st.greet = GREET_T;
+      if (st.greet > 0) { st.greet -= d; if (st.greet <= 0) st.cool = 40; animate(st.h, 'wave', t); st.cur = faceTo(st.h.root.position, st.cur, d); }
+      else { animate(st.h, 'idle', t + st.h.opts.seed!); let dy = st.yaw - st.cur; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); st.cur += dy * Math.min(1, d * 3); }
+      st.h.root.position.set(st.x, st.y, st.z); st.h.root.rotation.y = st.cur;
+    }
     for (const b of state.birds) {
       const a = b.ph + t * b.w; const x = b.cx + Math.cos(a) * b.r, z = b.cz + Math.sin(a) * b.r;
       b.root.position.set(x, b.y + Math.sin(t * 0.7 + b.ph) * 2, z);
@@ -394,7 +442,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     }
     // игрок не проходит сквозь людей: мягкий толчок наружу
     if (P) {
-      const all = [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : [])];
+      const all = [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h)];
       for (const h of all) {
         const dx = P.x - h.root.position.x, dz = P.z - h.root.position.z; const dist = Math.hypot(dx, dz);
         if (dist < 0.7 && dist > 1e-4 && Math.abs(P.y - h.root.position.y) < 2) { const k = (0.7 - dist) / dist; P.x += dx * k; P.z += dz * k; }
