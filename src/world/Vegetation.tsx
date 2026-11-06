@@ -2,7 +2,7 @@
 // кусты вдоль домов и на газоне, франжипани у дорожек. Всё инстансами: несколько вызовов отрисовки на тысячи растений.
 import { useEffect, useMemo, useRef } from 'react';
 import {
-  BufferAttribute, BufferGeometry, Color, CylinderGeometry, DoubleSide, Float32BufferAttribute, IcosahedronGeometry,
+  BufferAttribute, BufferGeometry, Color, CylinderGeometry, DoubleSide, IcosahedronGeometry,
   InstancedMesh, Matrix4, MeshStandardMaterial, PlaneGeometry, Quaternion, SphereGeometry, Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';

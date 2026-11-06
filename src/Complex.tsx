@@ -5,9 +5,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useThree } from '@react-three/fiber';
 import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
-  Box3, BufferAttribute, BufferGeometry, Color, CylinderGeometry, PlaneGeometry, DoubleSide, ExtrudeGeometry,
-  Float32BufferAttribute, Group, InstancedMesh, Matrix4, Mesh, MeshPhysicalMaterial, MeshStandardMaterial,
-  Quaternion, Ray, RepeatWrapping, Shape, SRGBColorSpace, Vector3,
+  Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, ExtrudeGeometry,
+  Float32BufferAttribute, Group, Matrix4, Mesh, MeshStandardMaterial,
+  Ray, RepeatWrapping, Shape, SRGBColorSpace, Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { applyMaterialRules, openDoors } from './materials';
