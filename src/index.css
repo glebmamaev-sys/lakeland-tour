@@ -107,7 +107,7 @@ canvas { display: block; }
 .hud .vr-btn { margin-left: 8px; }
 .hud .vr-btn:disabled { opacity: .45; cursor: default; }
 
-.hud-topright { position: absolute; top: 16px; right: 16px; display: flex; align-items: center; }
+.hud-topright { position: absolute; top: 16px; right: 16px; display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: calc(100% - 32px); }
 .hud-bottom.chips { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; padding: 0 16px; bottom: 18px; opacity: 1; }
 .hud-hint { position: absolute; bottom: 64px; left: 0; right: 0; text-align: center; font-size: 12px; opacity: .7; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
 
