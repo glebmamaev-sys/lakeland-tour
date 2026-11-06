@@ -5,6 +5,7 @@ import {
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, Float32BufferAttribute, Material, Mesh,
   MeshPhysicalMaterial, MeshStandardMaterial, Object3D, RepeatWrapping, SRGBColorSpace, Texture, Vector2, Vector3,
 } from 'three';
+import { applyInteriorFinish, makeTileTexture } from './world/textures';
 
 export type Role =
   | 'glass' | 'water' | 'ground' | 'paving' | 'terrain' | 'ceiling' | 'textured' | 'default'
@@ -504,6 +505,7 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
       const m = src.clone();
       m.roughness = 0.95; m.metalness = 0; m.side = DoubleSide;
       m.polygonOffset = true; m.polygonOffsetFactor = -4; m.polygonOffsetUnits = -4;
+      if (!m.map) applyInteriorFinish(m, tileTexture(), assets.stucco, 1 / 3.0);
       return m;
     }
     case 'ceiling':
@@ -528,7 +530,11 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
       // чисто чёрные/очень тёмные «служебные» цвета Revit слегка поднимаем, иначе проваливаются в тень
       const lum = 0.3 * m.color.r + 0.59 * m.color.g + 0.11 * m.color.b;
       if (lum < 0.08) m.color.setScalar(0.18);
+      // отделка: полы — плитка известняка, стены — рельеф штукатурки (трипланарно, тёмные детали не трогаем)
+      if (!m.map) applyInteriorFinish(m, tileTexture(), assets.stucco);
       return m;
     }
   }
 }
+let tileCache: Texture | null = null;
+function tileTexture(): Texture { if (!tileCache) tileCache = makeTileTexture(); return tileCache; }

@@ -124,3 +124,46 @@ export function applyDetailMaps(m: MeshStandardMaterial, maps: DetailMaps, woodS
   };
   m.needsUpdate = true;
 }
+
+/** Пол из крупноформатного известняка: 4×4 плитки на текстуру (при повторе 1 текстура = 2,4 м → плитка 0,6 м),
+ *  тёплый бежевый с лёгкой вариацией по плиткам, прожилки шумом, тонкие швы. */
+export function makeTileTexture(n = 512, seed = 21): CanvasTexture {
+  const f = noiseField(n, 4, seed), f2 = noiseField(n, 2, seed + 7); const r = rng(seed);
+  const c = document.createElement('canvas'); c.width = c.height = n;
+  const ctx = c.getContext('2d')!; const img = ctx.createImageData(n, n);
+  const tiles = 4, T = n / tiles; const tileTone: number[] = []; for (let i = 0; i < tiles * tiles; i++) tileTone.push((r() - 0.5) * 0.08);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const tx = Math.floor(x / T), ty = Math.floor(y / T); const gx = x % T, gy = y % T;
+    const grout = gx < 2 || gy < 2;
+    let v = 0.86 + tileTone[ty * tiles + tx] + (f[y * n + x] - 0.5) * 0.12 + (f2[y * n + x] - 0.5) * 0.06;
+    if (grout) v = 0.62;
+    const i = (y * n + x) * 4; img.data[i] = v * 240; img.data[i + 1] = v * 228; img.data[i + 2] = v * 205; img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new CanvasTexture(c); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.minFilter = LinearMipmapLinearFilter; t.magFilter = LinearFilter; t.anisotropy = 8; return t;
+}
+
+/** Отделка «по умолчанию» для мешей Revit без текстур (один меш на материал: полы, стены, лестницы, парапеты):
+ *  горизонтальные поверхности сверху — плитка известняка, вертикальные — рельеф штукатурки, низ (потолки) —
+ *  гладкая. Трипланарно по мировым координатам; тёмные материалы (перила, рамы) не трогаются. */
+export function applyInteriorFinish(m: MeshStandardMaterial, tile: Texture, stucco: Texture, tileScale = 1 / 2.4, stuccoScale = 0.5) {
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uTile = { value: tile }; sh.uniforms.uStucco = { value: stucco }; sh.uniforms.uTileScale = { value: tileScale }; sh.uniforms.uStuccoScale = { value: stuccoScale };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFPos; varying vec3 vFNrm;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vFNrm = normalize(mat3(modelMatrix) * objectNormal);');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFPos; varying vec3 vFNrm; uniform sampler2D uTile; uniform sampler2D uStucco; uniform float uTileScale; uniform float uStuccoScale;')
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        {
+          vec3 c = diffuseColor.rgb; float lum = dot(c, vec3(0.3, 0.59, 0.11));
+          if (lum > 0.45) {
+            vec3 n = normalize(vFNrm); vec3 an = abs(n);
+            if (n.y > 0.6) { vec3 t = texture2D(uTile, vFPos.xz * uTileScale).rgb; diffuseColor.rgb = t * mix(vec3(1.0), c / max(lum, 0.3), 0.25); }
+            else if (n.y < -0.6) { diffuseColor.rgb = c * 1.02; }
+            else { vec2 uv = an.x > an.z ? vFPos.zy : vFPos.xy; float w = texture2D(uStucco, uv * uStuccoScale).g; diffuseColor.rgb = c * mix(0.9, 1.06, w); }
+          }
+        }`);
+  };
+  m.needsUpdate = true;
+}
