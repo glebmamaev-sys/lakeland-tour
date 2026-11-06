@@ -309,30 +309,34 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         for (const { m, fp } of hp) { lp.set(x, 0, z).applyMatrix4(m); best = Math.min(best, Math.hypot(Math.max(fp[0] - lp.x, 0, lp.x - fp[2]), Math.max(fp[1] - lp.z, 0, lp.z - fp[3]))); }
         if (shopB) best = Math.min(best, Math.max(0, Math.hypot(x - shopB.pos[0], z - shopB.pos[1]) - 7)); return best; };
       const cx = houses.reduce((a, hh) => a + hh.matrix.elements[12], 0) / Math.max(1, houses.length), cz = houses.reduce((a, hh) => a + hh.matrix.elements[14], 0) / Math.max(1, houses.length);
-      let filled = 0;
+      // 1) зона, пригодная для заливки (без учёта домов): до воды OSM ≤ 250 м, не дальше 220 м от центра, водная сторона
+      const elig = new Uint8Array(MN * MN);
       for (let j = 0; j < MN; j++) for (let i = 0; i < MN; i++) {
         const k = j * MN + i; if (water[k] === 1 || dist[k] < 0 || dist[k] * mstep > 250) continue;
         const x = i * mstep - c.dem.half, z = j * mstep - c.dem.half; if (Math.hypot(x - cx, z - cz) > 220) continue;
         const si = src[k] % MN, sj = (src[k] - si) / MN; const wx = si * mstep - c.dem.half - x, wz = sj * mstep - c.dem.half - z; const wl = Math.hypot(wx, wz) || 1;
         const vx = x - cx, vz = z - cz; const vl = Math.hypot(vx, vz) || 1;
-        if ((wx * vx + wz * vz) / (wl * vl) < 0.2) continue;
-        if (dHouse(x, z) < 10) continue;
-        water2[k] = 1; filled++;
+        if (vx <= 0 && vz <= 0) continue; // север и запад (канал, дорога, соседняя земля) не трогаем
+        // водная сторона: направление к ближайшей воде сонаправлено «от центра», либо клетка у самого берега OSM
+        // (до 30 м — там ближайшая вода часто сбоку из-за изгибов берега)
+        if ((wx * vx + wz * vz) / (wl * vl) >= 0.2 || dist[k] <= 3) elig[k] = 1;
       }
-      // только вода, связанная с лагуной (без отдельных «прудов» между домами)
+      // 2) только связанная с лагуной часть зоны (без отдельных прудов)
       const seen = new Uint8Array(MN * MN); const q2: number[] = [];
       for (let k = 0; k < MN * MN; k++) if (water[k] === 1) { seen[k] = 1; q2.push(k); }
       for (let qi = 0; qi < q2.length; qi++) { const k = q2[qi]; const i = k % MN, j = (k - i) / MN;
-        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= MN || jj >= MN) continue; const k2 = jj * MN + ii; if (seen[k2] || water2[k2] !== 1) continue; seen[k2] = 1; q2.push(k2); } }
-      for (let k = 0; k < MN * MN; k++) if (water2[k] === 1 && !seen[k]) water2[k] = 0;
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= MN || jj >= MN) continue; const k2 = jj * MN + ii; if (seen[k2] || !elig[k2]) continue; seen[k2] = 1; q2.push(k2); } }
+      // 3) грубая маска (вне сетки участка): зона минус 10 м от домов; 4) тонкая маска на сетке участка 0,5 м —
+      //    отступ 10 м считается в каждой клетке, кромка ровная
+      let filled = 0;
+      for (let j = 0; j < MN; j++) for (let i = 0; i < MN; i++) { const k = j * MN + i; if (water[k] === 1 || !seen[k]) continue; const x = i * mstep - c.dem.half, z = j * mstep - c.dem.half; if (dHouse(x, z) >= 10) { water2[k] = 1; filled++; } }
       console.info('[lagoon] подведена к виллам: залито клеток', filled, '(шаг', mstep, 'м)');
-      // тонкая береговая линия на сетке участка (0,5 м): грубая маска воды, расширенная на клетку, и ровно 10 м от домов
+      if (import.meta.env.DEV) (window as unknown as { __lagoon: unknown }).__lagoon = { water, water2, elig, seen, dist, MN, mstep, half: c.dem.half, dHouse, cx, cz };
       const S = c.site; lagoonFine = new Uint8Array(S.nx * S.nz);
-      const coarse = (x: number, z: number) => { const i = Math.round((x + c.dem.half) / mstep), j = Math.round((z + c.dem.half) / mstep); return i < 0 || j < 0 || i >= MN || j >= MN ? true : water2[j * MN + i] === 1; };
       for (let j = 0; j < S.nz; j++) for (let i = 0; i < S.nx; i++) {
         const x = S.x0 + i * S.step, z = S.z0 + j * S.step;
-        const near = coarse(x, z) || coarse(x + mstep, z) || coarse(x - mstep, z) || coarse(x, z + mstep) || coarse(x, z - mstep);
-        if (near && dHouse(x, z) >= 10) lagoonFine[j * S.nx + i] = 1;
+        const ci = Math.round((x + c.dem.half) / mstep), cj = Math.round((z + c.dem.half) / mstep); if (ci < 0 || cj < 0 || ci >= MN || cj >= MN) continue;
+        const k = cj * MN + ci; if (water[k] === 1 || (seen[k] && dHouse(x, z) >= 10)) lagoonFine[j * S.nx + i] = 1;
       }
     }
     const waterAt = (x: number, z: number) => {
@@ -488,6 +492,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const raw = demAt(x, z);
       let y = raw;
       if (inPoly(x, z, c.site.boundary)) y = Math.min(y, W - 3);
+      else if (isWater(x, z, raw)) y = Math.min(y, W - 0.6); // залитые клетки лагуны (подведена к виллам) — ниже уровня воды
       dp.set([x, y, z], k * 3); du.set([x / 12, z / 12], k * 2);
       const lc = coverAt(x, z); const cc = y < W + 1.5 ? shore : (lc === 2 ? openCol : landCol); dcol.set([cc.r, cc.g, cc.b], k * 3);
     }
