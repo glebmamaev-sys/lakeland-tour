@@ -21,7 +21,7 @@ export function ComplexSun({ walk, mobile }: { walk: boolean; mobile: boolean })
       tmp.set(P!.x, P!.y, P!.z); target.position.copy(tmp); l.position.copy(tmp).addScaledVector(SUN, 160);
       if (mode.current !== 'near') { cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R; cam.near = 20; cam.far = 400; cam.updateProjectionMatrix(); mode.current = 'near'; }
       // шаг квантования, чтобы тени не «кипели» при движении
-      const q = (2 * R) / (mobile ? 1536 : 2048) * 4; target.position.x = Math.round(target.position.x / q) * q; target.position.z = Math.round(target.position.z / q) * q;
+      const q = (2 * R) / (mobile ? 1536 : 2048) * 4; target.position.x = Math.round(target.position.x / q) * q; target.position.z = Math.round(target.position.z / q) * q; target.position.y = Math.round(target.position.y / 0.5) * 0.5;
       l.position.copy(target.position).addScaledVector(SUN, 160);
     } else if (mode.current !== 'far') {
       target.position.set(0, 8, 0); l.position.set(SUN.x * 220, SUN.y * 220 + 8, SUN.z * 220);
