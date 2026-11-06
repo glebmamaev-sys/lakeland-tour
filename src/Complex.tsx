@@ -21,6 +21,7 @@ import { Lagoon } from './world/Lagoon';
 import { buildPathNetwork, distToPaths, pathRibbon, type PathNet } from './world/Paths';
 import { makeArtTexture, makeNoiseTexture } from './world/textures';
 import { furnishVilla, glassBoxes } from './world/Interiors';
+import { Npcs } from './world/Characters';
 import { loadPlan } from './plan';
 import type { Plan } from './plan';
 
@@ -148,8 +149,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
 
   // экземпляры вилл: материалы как в прогулке, участок/рельеф самой модели скрыт
   const groundBVH = useRef(new Map<string, Collider>()); // рельеф шаблона каждого типа виллы (для подгонки земли)
-  const { instances, houses } = useMemo(() => {
-    if (!data) { (window as unknown as { __stage: string }).__stage = 'memo:nodata'; return { instances: [] as Group[], houses: [] as HouseInfo[] }; }
+  const { instances, houses, pools } = useMemo(() => {
+    if (!data) { (window as unknown as { __stage: string }).__stage = 'memo:nodata'; return { instances: [] as Group[], houses: [] as HouseInfo[], pools: [] as Box3[] }; }
     try {
     (window as unknown as { __stage: string }).__stage = 'instances:start';
     gltfs.forEach((g, k) => {
@@ -174,7 +175,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       }
     });
     (window as unknown as { __models: unknown }).__models = MODELS;
-    const houses: HouseInfo[] = [];
+    const houses: HouseInfo[] = []; const pools: Box3[] = [];
     const floorsTopo: Record<string, { plan: number; topo: number }> = {};
     const instances = data.c.buildings.filter((b) => b.model !== 'shop').map((b) => {
       const k = MODEL_IDS.indexOf(b.model as typeof MODEL_IDS[number]);
@@ -233,13 +234,15 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const corners: [number, number][] = [[fp.min.x, fp.min.z], [fp.max.x, fp.min.z], [fp.max.x, fp.max.z], [fp.min.x, fp.max.z]]
         .map(([x, z]) => { const w = outer.localToWorld(new Vector3(x, 0, z)); return [w.x, w.z]; });
       const e = outer.localToWorld(new Vector3(...(cfg.entry?.pos ?? cfg.spawn)));
+      // бассейны (меши воды) в мировых координатах — для пловцов
+      inner.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.userData.role === 'water' && m.visible) { const bx = new Box3().setFromObject(m); if (bx.max.x - bx.min.x > 1.5 && bx.max.z - bx.min.z > 1.5) pools.push(bx); } });
       houses.push({ id: b.id, model: b.model, title: `${b.id} · ${cfg.title}`, poly: corners, fp: [fp.min.x, fp.min.z, fp.max.x, fp.max.z], entry: [e.x, e.y, e.z], entryYaw: (cfg.entry?.yaw ?? cfg.spawnYaw) - b.rot, matrix: outer.matrixWorld.clone() });
       return outer;
     });
     (window as unknown as { __stage: string }).__stage = 'instances:done';
     console.info('[floors] план ±0,00 → по топосъёмке:', Object.entries(floorsTopo).map(([id, f]) => `${id}: ${f.plan} → ${f.topo} (${(f.topo - f.plan) >= 0 ? '+' : ''}${(f.topo - f.plan).toFixed(2)})`).join('; '));
     (window as unknown as { __floors: unknown }).__floors = floorsTopo;
-    return { instances, houses };
+    return { instances, houses, pools };
     } catch (e) { (window as unknown as { __stage: string }).__stage = 'memo:error ' + (e as Error).message; throw e; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
@@ -493,6 +496,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     return [WALK_SPAWN_XZ[0], y + 0.4, WALK_SPAWN_XZ[1]];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [built, data]);
+  const inSiteFn = useMemo(() => { const B = data?.c.site.boundary; return (x: number, z: number) => (B ? inPoly(x, z, B) : false); }, [data]);
   const spawnYaw = Math.atan2(-(WALK_LOOK_XZ[0] - WALK_SPAWN_XZ[0]), -(WALK_LOOK_XZ[1] - WALK_SPAWN_XZ[1]));
 
   // магазин у въезда — простой объём 1 этаж
@@ -557,6 +561,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       </group>
       {built && <><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>}
       {data && <Lagoon level={data.c.water_level} />}
+      {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} />}
     </group>
   );
 }
