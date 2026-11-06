@@ -12,7 +12,7 @@ import { VRButton } from './VRButton';
 import { Minimap } from './Minimap';
 import { RoomLabels } from './RoomLabels';
 import { Capture } from './Capture';
-import { ComplexScene, complexStore } from './Complex';
+import { ComplexScene, complexStage, complexStore } from './Complex';
 import { ComplexMap } from './ComplexMap';
 import { SkyDome, SUN } from './world/SkyDome';
 
@@ -35,6 +35,11 @@ export default function App() {
   const [locked, setLocked] = useState(false);
   const [complexWalk, setComplexWalk] = useState(() => new URLSearchParams(location.search).has('walk')); // «Комплекс»: с дрона (орбита) или пешком
   const [colliderState, setColliderState] = useState(complexStore.collider);
+  // этап загрузки комплекса для индикатора
+  const [cStage, setCStage] = useState(complexStage.value);
+  useEffect(() => { const l = (v: string) => setCStage(v); complexStage.listeners.add(l); return () => { complexStage.listeners.delete(l); }; }, []);
+  const stageLabel = cStage.startsWith('data') ? 'данные участка' : cStage.startsWith('instances') ? 'дома и интерьеры' : cStage === 'terrain:start' ? 'рельеф и газон' : cStage === 'terrain:paths' ? 'дорожки и растения' : cStage === 'terrain:done' ? '' : 'модели вилл';
+  const complexLoading = mode === 'complex' && cStage !== 'terrain:done';
   const [gl, setGl] = useState<WebGLRenderer | null>(null);
   const villa = VILLAS[villaId];
   const tour = PANO_TOURS[villaId] ?? [];
@@ -76,9 +81,9 @@ export default function App() {
       <Canvas
         shadows
         camera={{ fov: 70, near: 0.05, far: 500 }}
-        dpr={[1, 1.75]}
+        dpr={[1, input.mobile ? 1.25 : 1.5]}
         gl={{ antialias: true, powerPreference: 'high-performance' }}
-        onCreated={({ gl: r }) => { r.xr.enabled = true; setGl(r); }}
+        onCreated={({ gl: r }) => { r.xr.enabled = true; setGl(r); (window as unknown as { __gl: unknown }).__gl = r; }}
       >
         {mode === 'complex' ? (
           <>
@@ -89,7 +94,7 @@ export default function App() {
             <hemisphereLight args={['#cfe3f5', '#b9b39f', 0.9]} />
             <ambientLight intensity={0.35} />
             <directionalLight position={[SUN.x * 220, SUN.y * 220, SUN.z * 220]} color="#fff1d8" intensity={2.8} castShadow shadow-bias={-0.0004} shadow-normalBias={0.06}
-              shadow-mapSize={[4096, 4096]} shadow-camera-left={-170} shadow-camera-right={170} shadow-camera-top={170}
+              shadow-mapSize={input.mobile ? [2048, 2048] : [4096, 4096]} shadow-camera-left={-170} shadow-camera-right={170} shadow-camera-top={170}
               shadow-camera-bottom={-170} shadow-camera-near={20} shadow-camera-far={700} />
             <Suspense fallback={null}><ComplexScene walk={complexWalk} /></Suspense>
             <Capture />
@@ -182,7 +187,10 @@ export default function App() {
         )}
         {mode === 'walk' && input.mobile && <div className="hud-bottom">Левый джойстик — ходить · правая половина экрана — смотреть</div>}
         {mode === 'complex' && !complexWalk && <div className="hud-hint">Тяните — вращать · колесо — приблизить · правая кнопка — сдвинуть</div>}
-        {mode === 'complex' && complexWalk && colliderState !== 'ready' && (
+        {complexLoading && (
+          <div className="hud-center"><div className="hint-card"><div>Загружаем комплекс…</div><small>{stageLabel}</small></div></div>
+        )}
+        {mode === 'complex' && !complexLoading && complexWalk && colliderState !== 'ready' && (
           <div className="hud-center"><div className="hint-card"><div>Готовим прогулку…</div><small>Собираем стены, рельеф и двери всех 12 строений</small></div></div>
         )}
         {mode === 'complex' && complexWalk && colliderState === 'ready' && !input.mobile && !locked && (

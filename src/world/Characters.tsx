@@ -2,8 +2,10 @@
 // дорожек, садовник с газонокосилкой на газоне, пловцы в бассейнах вилл. Всё процедурно, без скачанных моделей.
 // Человек собран из коробок лицом на +z, ступни в y=0, рост ~1,7 м; руки и ноги — отдельные меши с шарниром
 // в плече/бедре, чтобы крутить их по кадрам. Один материал с вершинными цветами на всех.
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
+import { Html } from '@react-three/drei';
+import { playerState } from '../Player';
 import { Box3, BoxGeometry, BufferGeometry, CylinderGeometry, DoubleSide, Group, Matrix4, Mesh, MeshStandardMaterial, SphereGeometry, Vector3 } from 'three';
 import { box, col, merge, C } from './Furniture';
 import { distToPaths, type PathNet } from './Paths';
@@ -16,7 +18,7 @@ const PANTS = ['#d9d2c0', '#3b4a6b', '#5a3f2b', '#8c8c80', '#2a2927'];
 const HAIR = ['#1d1612', '#2a1e16', '#3a2a1e', '#0f0d0c'];
 
 export type HumanOpts = { seed?: number; hat?: boolean; swimwear?: boolean };
-export type Human = { root: Group; body: Mesh; armL: Group; armR: Group; legL: Group; legR: Group; opts: HumanOpts };
+export type Human = { root: Group; body: Mesh; armL: Group; armR: Group; legL: Group; legR: Group; opts: HumanOpts; female: boolean };
 
 const MAT = new MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: DoubleSide });
 
@@ -56,7 +58,7 @@ export function makeHuman(opts: HumanOpts = {}): Human {
   ], side * 0.1, 0.9);
   const armL = arm(-1), armR = arm(1), legL = leg(-1), legR = leg(1);
   root.add(armL, armR, legL, legR);
-  return { root, body, armL, armR, legL, legR, opts };
+  return { root, body, armL, armR, legL, legR, opts, female };
 }
 
 /** Газонокосилка: корпус, 4 колеса, ручка назад-вверх. Лицом на +z (толкают сзади, ручка в −z). */
@@ -70,7 +72,32 @@ export function makeMower(): Mesh {
   const m = new Mesh(merge(p), MAT); m.castShadow = true; return m;
 }
 
-export type Pose = 'walk' | 'idle' | 'swim' | 'mow';
+export type Pose = 'walk' | 'idle' | 'swim' | 'mow' | 'wave';
+/** Что говорят гости и садовник, когда к ним подходишь (по-английски). */
+export const GREETINGS = [
+  'Hello there! So glad to see you in this little corner of paradise. Enjoy your stay at Lake Land!',
+  'Welcome! It is wonderful to see you here, in our little piece of paradise by the lagoon.',
+  'Hi! Great to see you. Isn\'t this place heavenly? Make yourself at home.',
+  'Good day! So happy you came to visit this corner of paradise. Have a lovely walk!',
+];
+let current: HTMLAudioElement | null = null;
+/** Озвучка реплики: записанный клип (нейросетевой голос, public/audio), если не загрузился — системный synthesis. */
+export function speak(text: string, female = true, index = 0, base = '') {
+  try {
+    if (current) { current.pause(); current = null; }
+    const a = new Audio(`${base}audio/greet_${female ? 'f' : 'm'}_${index}.mp3`); a.volume = 0.9; current = a;
+    a.play().catch(() => speakSynth(text, female));
+  } catch { speakSynth(text, female); }
+}
+function speakSynth(text: string, female: boolean) {
+  try {
+    if (!('speechSynthesis' in window)) return;
+    const u = new SpeechSynthesisUtterance(text); u.lang = 'en-US'; u.rate = 0.92; u.pitch = female ? 1.05 : 0.9;
+    const vs = speechSynthesis.getVoices().filter((x) => x.lang.startsWith('en'));
+    const v = vs.find((x) => /premium|enhanced|natural|neural|siri/i.test(x.name)) ?? vs.find((x) => /google/i.test(x.name)) ?? vs[0];
+    if (v) u.voice = v; speechSynthesis.cancel(); speechSynthesis.speak(u);
+  } catch { /* без голоса */ }
+}
 /** Процедурная анимация: t — время, speed — скорость движения (частота шага). */
 export function animate(h: Human, pose: Pose, t: number, speed = 1.2) {
   const f = speed * 4.6; const ph = t * f;
@@ -86,8 +113,13 @@ export function animate(h: Human, pose: Pose, t: number, speed = 1.2) {
     const p2 = t * 3.2; h.armL.rotation.x = p2 % (Math.PI * 2); h.armR.rotation.x = (p2 + Math.PI) % (Math.PI * 2);
     h.legL.rotation.x = Math.sin(t * 9) * 0.25; h.legR.rotation.x = -Math.sin(t * 9) * 0.25;
     h.body.position.y = 0;
+  } else if (pose === 'wave') {
+    // стоит, правая рука поднята и машет
+    h.legL.rotation.x = h.legR.rotation.x = 0; h.armL.rotation.x = -0.1; h.root.rotation.x = 0;
+    h.armR.rotation.x = 2.75; h.armR.rotation.z = Math.sin(t * 9) * 0.35 - 0.2;
+    h.body.position.y = Math.sin(t * 1.3) * 0.01;
   } else {
-    h.legL.rotation.x = h.legR.rotation.x = 0; h.armL.rotation.x = Math.sin(t * 0.8) * 0.05 - 0.1; h.armR.rotation.x = -Math.sin(t * 0.9) * 0.05 - 0.1;
+    h.legL.rotation.x = h.legR.rotation.x = 0; h.armL.rotation.x = Math.sin(t * 0.8) * 0.05 - 0.1; h.armR.rotation.x = -Math.sin(t * 0.9) * 0.05 - 0.1; h.armR.rotation.z = 0;
     h.body.position.y = Math.sin(t * 1.3) * 0.01; h.root.rotation.x = 0;
   }
 }
@@ -106,9 +138,9 @@ function buildGraph(net: PathNet): Graph {
 }
 
 type HouseLite = { fp: [number, number, number, number]; matrix: Matrix4 };
-type Walker = { h: Human; edge: number; from: number; t: number; speed: number; yaw: number; pause: number };
+type Walker = { h: Human; edge: number; from: number; t: number; speed: number; yaw: number; pause: number; greet: number; cool: number };
 type Swimmer = { h: Human; box: Box3; along: 'x' | 'z'; dir: number; pos: number; speed: number; y: number };
-type Gardener = { h: Human; mower: Mesh; rect: [number, number, number, number]; x: number; z: number; dir: number; row: number; speed: number; turning: number; yaw: number };
+type Gardener = { h: Human; mower: Mesh; rect: [number, number, number, number]; x: number; z: number; dir: number; row: number; speed: number; turning: number; yaw: number; greet: number; cool: number };
 
 const tmp = new Vector3(), tmp2 = new Vector3(), inv = new Matrix4();
 function distToHouses(houses: HouseLite[], x: number, z: number): number {
@@ -140,8 +172,8 @@ export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number
   return best?.rect ?? null;
 }
 
-export function Npcs({ net, heightAt, houses, pools, inSite }: {
-  net: PathNet; heightAt: (x: number, z: number) => number | null; houses: HouseLite[]; pools: Box3[]; inSite: (x: number, z: number) => boolean;
+export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '' }: {
+  net: PathNet; heightAt: (x: number, z: number) => number | null; houses: HouseLite[]; pools: Box3[]; inSite: (x: number, z: number) => boolean; audioBase?: string;
 }) {
   const root = useRef<Group>(null);
   const state = useMemo(() => {
@@ -150,7 +182,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite }: {
     const n = graph.edges.length;
     for (let i = 0; i < 6 && n; i++) {
       const h = makeHuman({ seed: 100 + i }); const edge = Math.floor(r() * n); const e = graph.edges[edge];
-      walkers.push({ h, edge, from: r() < 0.5 ? e.a : e.b, t: r(), speed: 0.9 + r() * 0.5, yaw: 0, pause: 0 });
+      walkers.push({ h, edge, from: r() < 0.5 ? e.a : e.b, t: r(), speed: 0.9 + r() * 0.5, yaw: 0, pause: 0, greet: 0, cool: 0 });
     }
     // пловцы: в бассейнах длиной ≥ 5 м, по одному; в самом большом — двое
     const big = pools.filter((b) => { const s = b.getSize(tmp2); return Math.max(s.x, s.z) >= 5 && Math.min(s.x, s.z) >= 2.2; })
@@ -169,7 +201,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite }: {
     let gardener: Gardener | null = null;
     if (lawn) {
       const h = makeHuman({ seed: 500, hat: true }); const mower = makeMower();
-      gardener = { h, mower, rect: lawn, x: lawn[0] + 0.5, z: lawn[1] + 0.5, dir: 1, row: 0, speed: 0.75, turning: 0, yaw: 0 };
+      gardener = { h, mower, rect: lawn, x: lawn[0] + 0.5, z: lawn[1] + 0.5, dir: 1, row: 0, speed: 0.75, turning: 0, yaw: 0, greet: 0, cool: 0 };
     }
     (window as unknown as { __npcDbg: unknown }).__npcDbg = { distToHouses: (x: number, z: number) => distToHouses(houses, x, z), distToPaths: (x: number, z: number) => distToPaths(net, x, z) };
     return { graph, walkers, swimmers, gardener };
@@ -185,12 +217,32 @@ export function Npcs({ net, heightAt, houses, pools, inSite }: {
   }, [state]);
 
   const clock = useRef(0);
+  // приветствие: игрок остановился рядом (< 3,2 м, почти не двигается 0,5 с) — персонаж поворачивается, машет,
+  // говорит по-английски (пузырь + synthesis), через 6 с идёт дальше; один говорящий за раз, пауза 40 с на персонажа
+  const [bubble, setBubble] = useState<{ pos: [number, number, number]; text: string } | null>(null);
+  const playerTrack = useRef({ x: 0, z: 0, still: 0 });
+  const greetingActive = useRef(false);
+  const GREET_T = 6.5;
+  const tryGreet = (h: Human, cool: number, d: number): string | null => {
+    const pos = h.root.position; const P = playerState.pos; if (!P || cool > 0 || greetingActive.current) return null;
+    if (Math.hypot(P.x - pos.x, P.z - pos.z) > 3.2 || playerTrack.current.still < 0.5) return null;
+    const i = Math.floor(Math.random() * GREETINGS.length); const text = GREETINGS[i];
+    greetingActive.current = true; setBubble({ pos: [pos.x, pos.y + 2.05, pos.z], text }); speak(text, h.female, i, audioBase);
+    setTimeout(() => { greetingActive.current = false; setBubble(null); }, GREET_T * 1000 - 200);
+    void d; return text;
+  };
+  const faceTo = (pos: Vector3, cur: number, d: number) => { const P = playerState.pos; if (!P) return cur; const yaw = Math.atan2(P.x - pos.x, P.z - pos.z); let dy = yaw - cur; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); return cur + dy * Math.min(1, d * 5); };
   useFrame((_, dt) => {
     const d = Math.min(dt, 0.1); clock.current += d; const t = clock.current;
     const { graph } = state;
+    const P = playerState.pos; const pt = playerTrack.current;
+    if (P) { if (Math.hypot(P.x - pt.x, P.z - pt.z) < 0.12) pt.still += d; else { pt.still = 0; pt.x = P.x; pt.z = P.z; } } else pt.still = 0;
     for (const w of state.walkers) {
       const e = graph.edges[w.edge]; const a = graph.nodes[w.from], b = graph.nodes[w.from === e.a ? e.b : e.a];
       const L = Math.max(0.01, a.distanceTo(b));
+      w.cool = Math.max(0, w.cool - d);
+      if (w.greet <= 0 && tryGreet(w.h, w.cool, d)) w.greet = GREET_T;
+      if (w.greet > 0) { w.greet -= d; if (w.greet <= 0) w.cool = 40; animate(w.h, 'wave', t); w.yaw = faceTo(w.h.root.position, w.yaw, d); w.h.root.rotation.y = w.yaw; continue; }
       if (w.pause > 0) { w.pause -= d; animate(w.h, 'idle', t + w.h.opts.seed!); }
       else {
         w.t += (w.speed * d) / L;
@@ -218,19 +270,26 @@ export function Npcs({ net, heightAt, houses, pools, inSite }: {
     const g = state.gardener;
     if (g) {
       const [x0, z0, x1, z1] = g.rect; const rowStep = 0.55;
-      if (g.turning > 0) { g.turning -= d; animate(g.h, 'idle', t); }
+      g.cool = Math.max(0, g.cool - d);
+      if (g.greet <= 0 && tryGreet(g.h, g.cool, d)) g.greet = GREET_T;
+      if (g.greet > 0) { g.greet -= d; if (g.greet <= 0) g.cool = 40; animate(g.h, 'wave', t); g.yaw = faceTo(g.h.root.position, g.yaw, d); g.h.root.rotation.y = g.yaw; }
+      else if (g.turning > 0) { g.turning -= d; animate(g.h, 'idle', t); }
       else {
         g.x += g.dir * g.speed * d;
         if (g.x > x1 - 0.5 || g.x < x0 + 0.5) { g.x = Math.max(x0 + 0.5, Math.min(x1 - 0.5, g.x)); g.dir *= -1; g.row++; g.turning = 1.2; if (z0 + 0.5 + g.row * rowStep > z1 - 0.5) g.row = 0; }
         g.z = z0 + 0.5 + g.row * rowStep;
         animate(g.h, 'mow', t, g.speed);
       }
-      const yaw = g.dir > 0 ? Math.PI / 2 : -Math.PI / 2; let dy = yaw - g.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); g.yaw += dy * Math.min(1, d * 4);
+      if (g.greet <= 0) { const yaw = g.dir > 0 ? Math.PI / 2 : -Math.PI / 2; let dy = yaw - g.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); g.yaw += dy * Math.min(1, d * 4); }
       const y = heightAt(g.x, g.z) ?? g.h.root.position.y;
       g.h.root.position.set(g.x, y + 0.02, g.z); g.h.root.rotation.y = g.yaw;
       const mx = g.x + Math.sin(g.yaw) * 0.85, mz = g.z + Math.cos(g.yaw) * 0.85; const my = heightAt(mx, mz) ?? y;
-      g.mower.position.set(mx, my + 0.02, mz); g.mower.rotation.y = g.yaw;
+      if (g.greet <= 0) { g.mower.position.set(mx, my + 0.02, mz); g.mower.rotation.y = g.yaw; }
     }
   });
-  return <group ref={root} />;
+  return (
+    <group ref={root}>
+      {bubble && <Html position={bubble.pos} center zIndexRange={[50, 0]} style={{ pointerEvents: 'none' }}><div className="npc-bubble">{bubble.text}</div></Html>}
+    </group>
+  );
 }

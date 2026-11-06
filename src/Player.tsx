@@ -21,6 +21,9 @@ const tmpMat = new Matrix4();
 const tmpSeg = new Line3();
 const dir = new Vector3();
 
+/** Положение игрока для персонажей (приветствия): ссылка на позицию капсулы, null вне прогулки. */
+export const playerState: { pos: Vector3 | null } = { pos: null };
+
 export function Player({ spawn = [0, 0.5, 0] as [number, number, number], yaw = 0 }: { spawn?: [number, number, number]; yaw?: number }) {
   const { camera, gl } = useThree();
   const player = useRef(new Object3D()).current;
@@ -35,7 +38,8 @@ export function Player({ spawn = [0, 0.5, 0] as [number, number, number], yaw = 
     input.yaw = yaw; input.pitch = 0;
     // отладочный доступ из консоли: __tour.pos, __tour.input
     (window as unknown as { __tour: unknown }).__tour = { pos: player.position, input, onGround };
-    return attachInput(gl.domElement);
+    playerState.pos = player.position;
+    const detach = attachInput(gl.domElement); return () => { playerState.pos = null; detach(); };
   }, [gl, player, vel, spawn, yaw]);
 
   useFrame((_, delta) => {

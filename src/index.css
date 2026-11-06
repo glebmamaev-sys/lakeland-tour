@@ -184,3 +184,8 @@ canvas { display: block; }
 .mm-house { fill: rgba(241,236,226,.8); stroke: rgba(0,0,0,.35); stroke-width: .6; }
 .mm-room:hover .mm-house { fill: var(--accent); }
 .hud-center .building { font-size: 14px; opacity: .8; }
+
+/* реплика персонажа (приветствие) */
+.npc-bubble { width: max-content; max-width: 260px; padding: 9px 13px; border-radius: 14px; background: rgba(255, 252, 245, 0.96); color: #2a2927;
+  font: 500 14px/1.3 system-ui, -apple-system, sans-serif; box-shadow: 0 4px 18px rgba(0,0,0,.18); position: relative; text-align: center; }
+.npc-bubble::after { content: ''; position: absolute; left: 50%; bottom: -8px; margin-left: -8px; border: 8px solid transparent; border-top-color: rgba(255, 252, 245, 0.96); border-bottom: 0; }

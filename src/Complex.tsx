@@ -6,7 +6,7 @@ import { useThree } from '@react-three/fiber';
 import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, ExtrudeGeometry,
-  Float32BufferAttribute, Group, Matrix4, Mesh, MeshStandardMaterial,
+  Float32BufferAttribute, Group, LOD, Matrix4, Mesh, MeshStandardMaterial,
   Ray, RepeatWrapping, Shape, SRGBColorSpace, Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
@@ -41,10 +41,21 @@ export const complexStore: {
   /** 'none' — коллайдер не строился, 'building' — строится, 'ready' — можно ходить */
   collider: 'none' | 'building' | 'ready';
 } = { data: null, houses: [], heightAt: null, collider: 'none' };
-let complexCollider: Collider | null = null; // кэш между заходами в режим (сцена размонтируется при смене режима)
+let complexCollider: Collider | null = null;
+let builtCache: { data: NonNullable<ReturnType<typeof useComplexData>>; built: BuiltScene; heightAt: (x: number, z: number) => number | null } | null = null; // рельеф/растения между заходами
+/** Этап загрузки комплекса (для индикатора и замеров): window.__stage, window.__stageTimes. */
+const stageTimes: Record<string, number> = {};
+export const complexStage = { value: '', listeners: new Set<(s: string) => void>() };
+function setStage(name: string) {
+  complexStage.value = name; stageTimes[name] = Math.round(performance.now());
+  (window as unknown as { __stage: string; __stageTimes: unknown }).__stage = name; (window as unknown as { __stageTimes: unknown }).__stageTimes = stageTimes;
+  complexStage.listeners.forEach((l) => l(name));
+} // кэш между заходами в режим (сцена размонтируется при смене режима)
 
 /** Точка старта пешей прогулки: у въезда рядом с магазином, взгляд на ряд вилл. */
 const WALK_SPAWN_XZ: [number, number] = [-36, -34];
+const LOD_FAR = 65;
+type BuiltScene = { site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
@@ -82,7 +93,7 @@ function useComplexData() {
       fetch(asset('complex/land_h.bin')).then((r) => r.arrayBuffer()),
       fetch(asset('complex/landcover.bin')).then((r) => (r.ok && !(r.headers.get('content-type') || '').includes('text/html') ? r.arrayBuffer() : null)).catch(() => null),
       Promise.all(MODEL_IDS.map((id) => loadPlan(id))),
-    ]).then(([c, s, dm, wm, lh, lc, plans]) => { (window as unknown as { __stage: string }).__stage = 'data:' + (alive ? 'set' : 'stale'); if (alive) setD({ c, site: new Float32Array(s), dem: new Float32Array(dm), water: new Uint8Array(wm), land: new Float32Array(lh), cover: lc ? new Uint8Array(lc) : null, plans: Object.fromEntries(MODEL_IDS.map((id, k) => [id, plans[k]])) }); }).catch((e) => { (window as unknown as { __stage: string }).__stage = 'data:error ' + e; });
+    ]).then(([c, s, dm, wm, lh, lc, plans]) => { setStage('data:' + (alive ? 'set' : 'stale')); if (alive) setD({ c, site: new Float32Array(s), dem: new Float32Array(dm), water: new Uint8Array(wm), land: new Float32Array(lh), cover: lc ? new Uint8Array(lc) : null, plans: Object.fromEntries(MODEL_IDS.map((id, k) => [id, plans[k]])) }); }).catch((e) => { setStage('data:error ' + e); });
     return () => { alive = false; };
   }, []);
   return d;
@@ -133,6 +144,8 @@ function rng(seed: number) { return () => { seed = (seed * 16807) % 2147483647; 
 export function ComplexScene({ walk = false }: { walk?: boolean }) {
   const data = useComplexData();
   const gltfs = MODEL_IDS.map((id) => useGLTF(asset(MODELS[id].url)));
+  // упрощённые копии (gltf-transform simplify, ~25 % треугольников) для домов дальше LOD_FAR: без теней и коллизий
+  const lows = MODEL_IDS.map((id) => useGLTF(asset(MODELS[id].url.replace('.glb', '_low.glb'))));
   const tex = useTexture({
     grass: asset('textures/grass.jpg'),
     slats: asset('textures/slats.jpg'), slatsN: asset('textures/slats_n.webp'),
@@ -143,16 +156,16 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     mosaic: asset('textures/mosaic.jpg'),
   });
   const { camera } = useThree();
-  const [built, setBuilt] = useState<{ site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet } | null>(null);
+  const [built, setBuilt] = useState<BuiltScene | null>(null);
   const instRoot = useRef<Group>(null);
   const groundRoot = useRef<Group>(null);
 
   // экземпляры вилл: материалы как в прогулке, участок/рельеф самой модели скрыт
   const groundBVH = useRef(new Map<string, Collider>()); // рельеф шаблона каждого типа виллы (для подгонки земли)
   const { instances, houses, pools } = useMemo(() => {
-    if (!data) { (window as unknown as { __stage: string }).__stage = 'memo:nodata'; return { instances: [] as Group[], houses: [] as HouseInfo[], pools: [] as Box3[] }; }
+    if (!data) { setStage('memo:nodata'); return { instances: [] as Group[], houses: [] as HouseInfo[], pools: [] as Box3[] }; }
     try {
-    (window as unknown as { __stage: string }).__stage = 'instances:start';
+    setStage('instances:start');
     gltfs.forEach((g, k) => {
       // шаблон ставим как в прогулке (поворот из Revit Z-up, сдвиг): роли земли/рельефа и вырезки считаются
       // по мировым габаритам, без поворота «высота» меша попадает в z и земля классифицируется как мощение
@@ -169,6 +182,13 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         furn.applyMatrix4(g.scene.matrixWorld.clone().invert()); g.scene.add(furn); g.scene.updateMatrixWorld(true);
         console.info('[furniture]', MODEL_IDS[k], furn.children.map((m) => ((m as Mesh).geometry.getAttribute('position').count / 3) | 0), 'tris in', (performance.now() - t1) | 0, 'ms');
       }
+      const low = lows[k].scene;
+      if (!low.userData.prepared) {
+        low.rotation.set(...cfg0.rotation); low.position.set(...cfg0.offset); low.updateMatrixWorld(true);
+        applyMaterialRules(low, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint });
+        low.traverse((o) => { const m = o as Mesh; if (m.isMesh) { m.userData.noCollide = true; m.castShadow = false; m.receiveShadow = false; } });
+        low.userData.prepared = true;
+      }
       if (!groundBVH.current.has(MODEL_IDS[k])) {
         const gc = buildColliderFromParts(collectColliderParts(g.scene, [], undefined, (m) => m.userData.role !== 'ground' && m.userData.role !== 'terrain'));
         if (gc) groundBVH.current.set(MODEL_IDS[k], gc);
@@ -182,8 +202,11 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const cfg = MODELS[b.model];
       const inner = gltfs[k].scene.clone(true);
       inner.rotation.set(...cfg.rotation); inner.position.set(...cfg.offset);
+      const innerLow = lows[k].scene.clone(true);
+      innerLow.rotation.set(...cfg.rotation); innerLow.position.set(...cfg.offset);
       const outer = new Group(); outer.name = `house-${b.id}`;
-      outer.add(inner); outer.rotation.y = -b.rot; outer.position.set(b.pos[0], b.floor, b.pos[1]);
+      const lod = new LOD(); lod.name = 'lod'; lod.addLevel(inner, 0); lod.addLevel(innerLow, LOD_FAR);
+      outer.add(lod); outer.rotation.y = -b.rot; outer.position.set(b.pos[0], b.floor, b.pos[1]);
       outer.updateMatrixWorld(true);
       // футпринт дома в координатах модели: по мешам не больше 32 м (большие меши — участок вместе с плитами)
       outer.rotation.y = 0; outer.position.set(0, 0, 0); outer.updateMatrixWorld(true);
@@ -219,7 +242,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       }
       floorsTopo[b.id] = { plan: bb.floorPlan, topo: +floorTopo.toFixed(2) };
       b.floor = floorTopo;
-      inner.traverse((o) => {
+      for (const root of [inner, innerLow]) root.traverse((o) => {
         const m = o as Mesh; if (!m.isMesh) return;
         const role = m.userData.role;
         if (role === 'ground' || role === 'terrain') { m.visible = false; m.userData.noCollide = true; return; }
@@ -239,18 +262,22 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       houses.push({ id: b.id, model: b.model, title: `${b.id} · ${cfg.title}`, poly: corners, fp: [fp.min.x, fp.min.z, fp.max.x, fp.max.z], entry: [e.x, e.y, e.z], entryYaw: (cfg.entry?.yaw ?? cfg.spawnYaw) - b.rot, matrix: outer.matrixWorld.clone() });
       return outer;
     });
-    (window as unknown as { __stage: string }).__stage = 'instances:done';
+    setStage('instances:done');
     console.info('[floors] план ±0,00 → по топосъёмке:', Object.entries(floorsTopo).map(([id, f]) => `${id}: ${f.plan} → ${f.topo} (${(f.topo - f.plan) >= 0 ? '+' : ''}${(f.topo - f.plan).toFixed(2)})`).join('; '));
     (window as unknown as { __floors: unknown }).__floors = floorsTopo;
     return { instances, houses, pools };
-    } catch (e) { (window as unknown as { __stage: string }).__stage = 'memo:error ' + (e as Error).message; throw e; }
+    } catch (e) { setStage('memo:error ' + (e as Error).message); throw e; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
-  // рельеф, вырезка под домами, окрестности, массовка
+  // рельеф, вырезка под домами, окрестности, массовка (считается один раз, при повторном входе в режим — из кэша)
   useEffect(() => {
     if (!data || !instances.length) return;
-    (window as unknown as { __stage: string }).__stage = 'terrain:start';
+    if (builtCache && builtCache.data === data) {
+      setBuilt(builtCache.built); complexStore.data = data.c; complexStore.houses = houses; complexStore.heightAt = builtCache.heightAt;
+      setStage('terrain:done'); return;
+    }
+    setStage('terrain:start');
     const { c, site, water, land, cover } = data;
     const LC_N = 401, LC_STEP = 10, LC_HALF = 2000;
     const coverAt = (x: number, z: number) => { if (!cover) return 1; const i = Math.round((x + LC_HALF) / LC_STEP), j = Math.round((z + LC_HALF) / LC_STEP); return i < 0 || j < 0 || i >= LC_N || j >= LC_N ? 1 : cover[j * LC_N + i]; };
@@ -411,7 +438,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     }
     const nbHouses = hg.length ? mergeGeometries(hg, true) : null;
     // дорожки: сеть по генплану (въезд → проезд между 2.x → дорога ряда 1.x → вилла 3), ленты 2,6 м по рельефу
-    (window as unknown as { __stage: string }).__stage = 'terrain:paths';
+    setStage('terrain:paths');
     const net = buildPathNetwork(houses, WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]);
     const ribbons = net.lines.map((l) => pathRibbon(l, 2.6, (x, z) => siteAt(x, z) ?? heightAt(x, z))).filter((g): g is BufferGeometry => !!g);
     const paths = ribbons.length ? mergeGeometries(ribbons, false) : null;
@@ -459,8 +486,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         const y = siteAt(px, pz); if (y === null) continue; frangipani.push({ x: px, y: y - 0.05, z: pz, s: r(), r: r() });
       }
     }
-    (window as unknown as { __stage: string }).__stage = 'terrain:done';
-    setBuilt({ site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net });
+    setStage('terrain:done');
+    const builtNow = { site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
     (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses };
   }, [data, instances, houses]);
@@ -561,7 +588,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       </group>
       {built && <><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>}
       {data && <Lagoon level={data.c.water_level} />}
-      {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} />}
+      {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} />}
     </group>
   );
 }
