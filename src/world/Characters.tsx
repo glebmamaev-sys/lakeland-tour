@@ -8,6 +8,9 @@ import { Html } from '@react-three/drei';
 import { playerState } from '../Player';
 import { Box3, BoxGeometry, BufferAttribute, BufferGeometry, Color, CylinderGeometry, DoubleSide, Group, Matrix4, Mesh, MeshStandardMaterial, SphereGeometry, Vector3 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { AnimationMixer, LoopRepeat, type AnimationAction, type AnimationClip, type Object3D } from 'three';
+import { useGLTF } from '@react-three/drei';
 import { box, col, merge, C } from './Furniture';
 import * as F from './Furniture';
 import { distToPaths, type PathNet } from './Paths';
@@ -20,7 +23,38 @@ const PANTS = ['#d9d2c0', '#3b4a6b', '#5a3f2b', '#8c8c80', '#2a2927'];
 const HAIR = ['#1d1612', '#2a1e16', '#3a2a1e', '#0f0d0c'];
 
 export type HumanOpts = { seed?: number; hat?: boolean; swimwear?: boolean };
-export type Human = { root: Group; body: Mesh; armL: Group; armR: Group; legL: Group; legR: Group; opts: HumanOpts; female: boolean };
+export type Skin = { mixer: AnimationMixer; actions: Record<string, AnimationAction>; cur: string; hand: Object3D | null };
+export type Human = { root: Group; body: Mesh; armL: Group; armR: Group; legL: Group; legR: Group; opts: HumanOpts; female: boolean; skin?: Skin };
+
+/** Персонажи Quaternius (CC0, «Ultimate Modular Men/Women»): public/models/chars/<id>.glb, клипы Idle, Idle_Neutral, Walk, Run, Wave, Interact. */
+export const CHAR_IDS = ['m_beach', 'm_casual', 'm_hoodie', 'm_worker', 'm_farmer', 'f_casual', 'f_formal', 'f_adventurer', 'f_worker'] as const;
+export type CharId = typeof CHAR_IDS[number];
+export const GUEST_IDS: CharId[] = ['m_beach', 'm_casual', 'm_hoodie', 'f_casual', 'f_adventurer'];
+export type CharGltf = { scene: Object3D; animations: AnimationClip[] };
+
+/** Скелетный человек из glTF: клон с общим скелетом (SkeletonUtils), микшер, экшены по именам клипов; рост 1,88 → 1,72–1,78. */
+export function makeSkinnedHuman(g: CharGltf, female: boolean, seed = 1): Human {
+  const r = rng(seed * 7919 + 17);
+  const root = new Group(); root.rotation.order = 'YXZ';
+  const model = skeletonClone(g.scene) as Object3D;
+  const h = (female ? 1.66 : 1.76) + (r() - 0.5) * 0.08; model.scale.setScalar(h / 1.88);
+  model.traverse((o) => { const m = o as Mesh; if (m.isMesh) { m.castShadow = true; m.frustumCulled = false; } });
+  root.add(model);
+  const mixer = new AnimationMixer(model); const actions: Record<string, AnimationAction> = {};
+  for (const c of g.animations) { const a = mixer.clipAction(c); a.setLoop(LoopRepeat, Infinity); actions[c.name] = a; }
+  const idle = actions.Idle_Neutral ?? actions.Idle; if (idle) { idle.play(); }
+  const hand = model.getObjectByName('Wrist.R') ?? null;
+  const dummy = new Group();
+  return { root, body: new Mesh(), armL: dummy, armR: dummy, legL: dummy, legR: dummy, opts: { seed }, female, skin: { mixer, actions, cur: idle ? (actions.Idle_Neutral ? 'Idle_Neutral' : 'Idle') : '', hand } };
+}
+/** Переключение клипа с кроссфейдом 0,25 с. */
+function play(sk: Skin, name: string, timeScale = 1) {
+  const next = sk.actions[name] ?? sk.actions.Idle; if (!next) return;
+  next.timeScale = timeScale;
+  if (sk.cur === name) return;
+  const prev = sk.actions[sk.cur]; next.reset().fadeIn(0.25).play(); if (prev && prev !== next) prev.fadeOut(0.25);
+  sk.cur = name;
+}
 
 const MAT = new MeshStandardMaterial({ vertexColors: true, roughness: 0.72, side: DoubleSide });
 
@@ -154,6 +188,14 @@ function speakSynth(text: string, female: boolean) {
 }
 /** Процедурная анимация: t — время, speed — скорость движения (частота шага). */
 export function animate(h: Human, pose: Pose, t: number, speed = 1.2) {
+  if (h.skin) { // клипы Quaternius; «лежать»/«плыть» для скелетных не используются
+    const sk = h.skin;
+    if (pose === 'walk' || pose === 'mow') play(sk, 'Walk', Math.max(0.6, speed / 1.15));
+    else if (pose === 'wave') play(sk, 'Wave');
+    else if (pose === 'water') play(sk, 'Interact', 0.8);
+    else play(sk, sk.actions.Idle_Neutral ? 'Idle_Neutral' : 'Idle');
+    h.root.rotation.x = 0; return;
+  }
   const f = speed * 4.6; const ph = t * f;
   const s = Math.sin(ph);
   if (pose === 'walk' || pose === 'mow') {
@@ -243,12 +285,15 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
   shrubs?: { x: number; y: number; z: number }[]; lagoon?: [number, number]; idlers?: { x: number; y: number; z: number; yaw: number }[];
 }) {
   const root = useRef<Group>(null);
+  const chars = useGLTF(CHAR_IDS.map((id) => `${audioBase}models/chars/${id}.glb`)) as unknown as CharGltf[];
+  const charOf = (id: CharId) => chars[CHAR_IDS.indexOf(id)];
   const state = useMemo(() => {
     const graph = buildGraph(net); const r = rng(11);
     const walkers: Walker[] = [];
     const n = graph.edges.length;
     for (let i = 0; i < 6 && n; i++) {
-      const h = makeHuman({ seed: 100 + i }); const edge = Math.floor(r() * n); const e = graph.edges[edge];
+      const gid = GUEST_IDS[(i * 7 + 3) % GUEST_IDS.length]; const h = makeSkinnedHuman(charOf(gid), gid.startsWith('f_'), 100 + i);
+      const edge = Math.floor(r() * n); const e = graph.edges[edge];
       // гости 1 и 3 идут парой со своим «ведущим» (0 и 2): тем же путём, на шаг позади и чуть сбоку
       const leader = i === 1 || i === 3 ? i - 1 : undefined;
       walkers.push({ h, edge, from: r() < 0.5 ? e.a : e.b, t: r(), speed: 0.9 + r() * 0.5, yaw: 0, pause: 0, greet: 0, cool: 0, leader, side: i % 2 ? 0.7 : 0 });
@@ -269,7 +314,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     const lawn = findLawn(houses, net, heightAt, inSite);
     let gardener: Gardener | null = null;
     if (lawn) {
-      const h = makeHuman({ seed: 500, hat: true }); const mower = makeMower();
+      const h = makeSkinnedHuman(charOf('m_farmer'), false, 500); const mower = makeMower();
       gardener = { h, mower, rect: lawn, x: lawn[0] + 0.5, z: lawn[1] + 0.5, dir: 1, row: 0, speed: 0.75, turning: 0, yaw: 0, greet: 0, cool: 0 };
     }
     // загорающие: два шезлонга у длинной стороны бассейна, дальней от дома, если там не стена
@@ -303,7 +348,8 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     if (inside.length > 3) {
       const start = inside[Math.floor(inside.length * 0.37)];
       const spots = inside.slice().sort((p, q) => Math.hypot(p.x - start.x, p.z - start.z) - Math.hypot(q.x - start.x, q.z - start.z)).slice(0, 4).map((p) => new Vector3(p.x, p.y, p.z));
-      const h = makeHuman({ seed: 520, hat: true }); const can = makeWateringCan(); can.position.set(0, -0.72, 0.04); h.armR.add(can);
+      const h = makeSkinnedHuman(charOf('f_worker'), true, 520); const can = makeWateringCan();
+      if (h.skin?.hand) { can.scale.setScalar(1 / (h.root.children[0].scale.x || 1)); can.position.set(0.05, -0.1, 0.05); can.rotation.z = -Math.PI / 2; h.skin.hand.add(can); }
       waterer = { h, can, spots, i: 0, x: spots[0].x + 0.9, z: spots[0].z, yaw: 0, watering: 5, greet: 0, cool: 0 };
     }
     // птицы: стая кружит над лагуной
@@ -311,9 +357,10 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     for (let i = 0; i < 9; i++) { const b = makeBird(); birds.push({ ...b, r: 22 + r() * 30, w: (0.09 + r() * 0.05) * (i % 3 ? 1 : -1), ph: r() * Math.PI * 2, y: 28 + r() * 18, cx: lagoon[0] + (r() - 0.5) * 60, cz: lagoon[1] + (r() - 0.5) * 60 }); }
     (window as unknown as { __npcDbg: unknown }).__npcDbg = { distToHouses: (x: number, z: number) => distToHouses(houses, x, z), distToPaths: (x: number, z: number) => distToPaths(net, x, z) };
     // стоящие персонажи (администратор за стойкой): стоят, здороваются, возвращаются к своему направлению
-    const standing: Idler[] = idlers.map((p, i) => ({ h: makeHuman({ seed: 900 + i }), x: p.x, y: p.y, z: p.z, yaw: p.yaw, cur: p.yaw, greet: 0, cool: 0 }));
+    const standing: Idler[] = idlers.map((p, i) => ({ h: makeSkinnedHuman(charOf('f_formal'), true, 900 + i), x: p.x, y: p.y, z: p.z, yaw: p.yaw, cur: p.yaw, greet: 0, cool: 0 }));
     return { graph, walkers, swimmers, gardener, sunbathers, waterer, birds, standing };
-  }, [net, heightAt, houses, pools, inSite, shrubs, lagoon, idlers]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [net, heightAt, houses, pools, inSite, shrubs, lagoon, idlers, chars]);
 
   useEffect(() => {
     const g = root.current; if (!g) return;
@@ -440,6 +487,8 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
       b.root.rotation.y = Math.atan2(-Math.sin(a) * b.w, Math.cos(a) * b.w) ; // по касательной
       const flap = Math.sin(t * 7 + b.ph) * 0.6; b.wl.rotation.z = -flap; b.wr.rotation.z = flap;
     }
+    // скелетные персонажи: шаг микшеров
+    for (const h of [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h)]) h.skin?.mixer.update(d);
     // игрок не проходит сквозь людей: мягкий толчок наружу
     if (P) {
       const all = [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h)];

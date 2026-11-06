@@ -4,7 +4,7 @@
 // стены в штукатурке, вывеска. Внутри: стойка ресепшен, стеллажи с товаром, два вендинговых автомата, кресла.
 import {
   BoxGeometry, BufferGeometry, CanvasTexture, CylinderGeometry, DoubleSide, Group, Mesh, MeshStandardMaterial, RepeatWrapping,
-  SRGBColorSpace, Texture, Vector3,
+  SphereGeometry, SRGBColorSpace, Texture, Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import * as F from './Furniture';
@@ -61,6 +61,47 @@ function shelving(seed: number): BufferGeometry[] {
   return p;
 }
 
+/** Кофемашина на тумбе: корпус из нержавейки, группа с рожком, чашки, кофейник. */
+function coffeeStation(): { matte: BufferGeometry[]; glow: BufferGeometry[] } {
+  const matte: BufferGeometry[] = [], glow: BufferGeometry[] = [];
+  matte.push(box(1.2, 0.9, 0.6, C.walnut, 0, 0, 0, 0.02));                                   // тумба
+  matte.push(box(1.26, 0.04, 0.66, C.stone, 0, 0.9, 0, 0.02));                                 // столешница
+  matte.push(box(0.5, 0.42, 0.42, '#b9bcc0', -0.2, 0.94, -0.05, 0.02));                        // корпус машины
+  matte.push(box(0.5, 0.06, 0.42, '#2a2927', -0.2, 1.36, -0.05, 0.01));                        // верх
+  for (const sx of [-1, 1]) { const g = new CylinderGeometry(0.025, 0.025, 0.08, 8); g.translate(-0.2 + sx * 0.12, 1.0, 0.2); matte.push(col(g, '#2a2927')); // рожки
+    const h = new CylinderGeometry(0.012, 0.012, 0.12, 6); h.rotateX(Math.PI / 2); h.translate(-0.2 + sx * 0.12, 1.0, 0.27); matte.push(col(h, '#2a2927')); }
+  matte.push(box(0.12, 0.05, 0.12, '#2a2927', -0.2, 1.08, 0.12, 0.01));                        // поддон
+  glow.push(box(0.14, 0.05, 0.01, '#9fd8ff', -0.2, 1.24, 0.165));                              // дисплей
+  const grinder = new CylinderGeometry(0.07, 0.09, 0.36, 10); grinder.translate(0.2, 0.94 + 0.18, -0.1); matte.push(col(grinder, '#2a2927'));
+  const bean = new CylinderGeometry(0.08, 0.08, 0.12, 10); bean.translate(0.2, 1.36, -0.1); matte.push(col(bean, '#5a3f2b', 0.05));
+  for (let i = 0; i < 6; i++) { const c = new CylinderGeometry(0.035, 0.028, 0.07, 8); c.translate(0.08 + (i % 3) * 0.09, 0.94 + 0.035 + Math.floor(i / 3) * 0.08, 0.12 + Math.floor(i / 3) * 0.0); matte.push(col(c, C.white)); } // чашки
+  matte.push(box(0.5, 0.25, 0.02, C.paper, 0.0, 1.5, -0.28, 0.01));                           // меню на стене
+  return { matte, glow };
+}
+/** Прилавок со свежими фруктами: деревянный стол с наклонными ящиками и россыпью плодов (сферы/эллипсоиды). */
+function fruitStand(seed: number): BufferGeometry[] {
+  const r = rng(seed); const p: BufferGeometry[] = [];
+  p.push(box(1.6, 0.06, 0.8, C.teak, 0, 0.8, 0, 0.03));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(box(0.06, 0.8, 0.06, C.teak, sx * 0.74, 0, sz * 0.34));
+  p.push(box(1.5, 0.4, 0.04, C.rattan, 0, 0.0, -0.38, 0.03));                                   // юбка-реечка сзади
+  const fruits: [string, number, number][] = [['#e2b23a', 0.07, 1.0], ['#c45f4a', 0.05, 1.0], ['#7a9a6a', 0.09, 0.8], ['#f1c232', 0.045, 1.3], ['#d9a5b3', 0.06, 1.0], ['#5a8f3a', 0.11, 0.75], ['#e8705f', 0.06, 1.0]];
+  for (let k = 0; k < 4; k++) { // четыре ящика, в каждом один вид фруктов горкой
+    const bx = -0.56 + (k % 2) * 1.12 * 0.5 + (k % 2 ? 0.0 : 0), bz = k < 2 ? -0.18 : 0.2; const x0 = (k % 2 ? 0.38 : -0.38), z0 = k < 2 ? -0.18 : 0.2; void bx; void bz;
+    p.push(box(0.7, 0.12, 0.34, C.walnut, x0, 0.86, z0, 0.03)); p.push(box(0.64, 0.02, 0.28, '#3a2a1e', x0, 0.96, z0));
+    const f = fruits[Math.floor(r() * fruits.length)]; const n = 10 + Math.floor(r() * 8);
+    for (let i = 0; i < n; i++) {
+      const g = new SphereGeometry(f[1], 10, 8); g.scale(1, f[2], 1);
+      g.translate(x0 - 0.26 + r() * 0.52, 0.98 + f[1] * f[2] + (r() < 0.35 ? f[1] * 1.6 : 0), z0 - 0.1 + r() * 0.2); p.push(col(g, f[0], 0.08));
+    }
+  }
+  // связка бананов и ананас сверху для узнаваемости
+  for (let i = 0; i < 5; i++) { const g = new CylinderGeometry(0.02, 0.025, 0.18, 6); g.rotateZ(0.5 + i * 0.12); g.translate(0.55 + i * 0.03, 1.08, 0.33); p.push(col(g, '#f1c232')); }
+  const pine = new CylinderGeometry(0.07, 0.08, 0.22, 10); pine.translate(-0.62, 1.09, 0.3); p.push(col(pine, '#c9a66b', 0.1));
+  for (let i = 0; i < 6; i++) { const l = new BoxGeometry(0.03, 0.16, 0.01); l.translate(0, 0.08, 0); l.rotateZ((i - 2.5) * 0.25); l.translate(-0.62, 1.2, 0.3); p.push(col(l, '#3f7a2f')); }
+  p.push(box(0.4, 0.16, 0.02, C.paper, 0, 1.25, -0.37, 0.01));                                  // табличка с ценами
+  return p;
+}
+
 export type ShopTextures = { stucco: Texture; stuccoN?: Texture; stone2: Texture; walnut: Texture };
 
 /** Строит магазин. W×D — пятно по генплану; groundDrop — на сколько земля у двери ниже пола (для пандуса). */
@@ -110,7 +151,7 @@ export function buildShop(W: number, D: number, tex: ShopTextures, groundDrop = 
   matte.push(F.place(F.pottedPlant('strelitzia', 3), -hw + 0.7, 0, -hd + 0.8));
   matte.push(F.place(F.rattanChair(), -2.3, 0, -hd + 0.8, Math.PI));                    // стул администратора
   // мини-маркет справа: два стеллажа вдоль правой стены, холодильные автоматы у задней стены
-  for (const z of [-0.3, 1.9]) { const sh = shelving(11 + z); for (const p of sh) matte.push(F.place(p, hw - T - 0.25, 0, z, -Math.PI / 2)); }
+  for (const z of [-1.9, 0.1]) { const sh = shelving(11 + z); for (const p of sh) matte.push(F.place(p, hw - T - 0.25, 0, z, -Math.PI / 2)); }
   [['#c45f4a', 1.1], ['#3b4a6b', 2.2]].forEach(([acc, x], i) => {
     const v = vendingMachine(acc as string, 21 + i);
     for (const p of v.matte) matte.push(F.place(p, x as number, 0, -hd + T + 0.42));
@@ -118,6 +159,9 @@ export function buildShop(W: number, D: number, tex: ShopTextures, groundDrop = 
     for (const p of v.cans) matte.push(F.place(p, x as number, 0, -hd + T + 0.42));
     glass.push(new BoxGeometry(0.6, 1.25, 0.02).translate((x as number) - 0.14, 0.95, -hd + T + 0.42 + 0.41));
   });
+  // кофе-станция у правой стены ближе к входу, два прилавка с фруктами по центру зала
+  { const cs = coffeeStation(); for (const q of cs.matte) matte.push(F.place(q, hw - T - 0.35, 0, hd - 2.2, -Math.PI / 2)); for (const q of cs.glow) glow.push(F.place(q, hw - T - 0.35, 0, hd - 2.2, -Math.PI / 2)); }
+  for (const [x, z, k] of [[1.0, 0.9, 31], [1.0, -1.2, 32]] as [number, number, number][]) for (const q of fruitStand(k)) matte.push(F.place(q, x, 0, z, Math.PI / 2));
   // уголок ожидания у витрины слева: два кресла, столик, ковёр, растение
   matte.push(F.place(F.rug(2.6, 2.0, C.jute), -2.6, 0.001, 1.6));
   matte.push(F.place(F.armchair(true), -3.3, 0, 1.2, Math.PI / 2 + 0.3));
