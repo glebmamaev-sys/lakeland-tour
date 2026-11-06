@@ -1,9 +1,9 @@
-// Растения из glTF-моделей (CC0 Quaternius, public/models/nature/*.glb): инстансирование по мешам модели —
+// Растения из glTF-моделей (CC0 Kenney Nature Kit, public/models/nature/*.glb): инстансирование по мешам модели —
 // у каждого меша (ствол, листва…) свой InstancedMesh с теми же матрицами экземпляров × матрица меша внутри модели.
 // Высота модели нормируется: place() даёт позицию/поворот/желаемую высоту в метрах.
 import { useEffect, useMemo, useRef } from 'react';
 import { useGLTF } from '@react-three/drei';
-import { Box3, DoubleSide, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
+import { Box3, Color, DoubleSide, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Object3D, Quaternion, Vector3 } from 'three';
 import type { Plant } from './Vegetation';
 
 export type Placement = { x: number; y: number; z: number; yaw: number; height: number; lean?: number; leanDir?: number };
@@ -20,7 +20,10 @@ export function ModelPlants({ url, items, place, castShadow = true }: ModelPlant
     gltf.scene.traverse((o) => {
       const m = o as Mesh; if (!m.isMesh) return;
       const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as MeshStandardMaterial;
-      const mm = mat.clone(); mm.side = DoubleSide; if ('alphaTest' in mm && mm.transparent) { mm.alphaTest = 0.5; mm.transparent = false; }
+      // палитра Kenney (бирюзовая листва, unlit, metalness 1) → наши тона: листва зелёная, кора коричневая, цветы как есть
+      const name = (mat.name || '').toLowerCase(); const src = mat.color ? mat.color.clone() : new Color('#888');
+      const color = /leaf|grass|foliage/.test(name) ? new Color('#4f8a3c') : /wood|bark|trunk/.test(name) ? new Color('#7a5a3c') : src;
+      const mm = new MeshStandardMaterial({ color, roughness: 0.92, metalness: 0, side: DoubleSide, map: mat.map ?? null });
       list.push({ geometry: m.geometry, material: mm, local: m.matrixWorld.clone() });
     });
     return { list, h, base };
