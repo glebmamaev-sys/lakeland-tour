@@ -7,7 +7,7 @@ import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, ExtrudeGeometry,
   Float32BufferAttribute, Group, LOD, Matrix4, Mesh, MeshStandardMaterial,
-  PlaneGeometry, Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3,
+  Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { applyMaterialRules, openDoors } from './materials';
@@ -69,7 +69,7 @@ let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
 
-type Placement = { id: string; model: string; floor: number; rot: number; pos: [number, number]; size?: [number, number] };
+type Placement = { id: string; model: string; floor: number; rot: number; pos: [number, number]; size?: [number, number]; moved?: boolean };
 type ComplexData = {
   water_level: number;
   site: { x0: number; z0: number; step: number; nx: number; nz: number; boundary: [number, number][]; paths: [number, number][][] };
@@ -312,7 +312,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     //    зафиксирована; между площадками рельеф не круче MAX_SLOPE (итеративное ограничение уклона от площадок),
     //    так земля не наезжает на стены и нет обрывов между домами с разной отметкой.
     {
-      const PAD = 3.0, MAX_SLOPE = 0.25; // 1:4
+      const PAD = 1.5, MAX_SLOPE = 0.25; // площадка 1,5 м от стен; дальше — гладкая мембрана между домами
       const fixed = new Uint8Array(nx * nz);
       const ray = new Ray(), lp = new Vector3(), inv = new Matrix4();
       // отметка площадки относительно пола дома (локальный y=0): плоские виллы 2.x — ровно пол, вилла 3 — рельеф
@@ -356,21 +356,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       }
       // лёгкое сглаживание вне площадок — до ограничения уклона, чтобы не вернуть крутизну у их края
       { const sm = blur(h, 2); for (let k = 0; k < nx * nz; k++) if (!fixed[k]) h[k] = sm[k]; }
-      // ограничение уклона: каждая незафиксированная клетка не выше/ниже соседей ± MAX_SLOPE·шаг; повторяем, пока меняется
-      const d = MAX_SLOPE * step;
-      for (let pass = 0; pass < 400; pass++) {
-        let changed = 0;
-        for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
-          const k = j * nx + i; if (fixed[k]) continue;
-          let lo = -Infinity, hiV = Infinity;
-          if (i > 0) { lo = Math.max(lo, h[k - 1] - d); hiV = Math.min(hiV, h[k - 1] + d); }
-          if (i < nx - 1) { lo = Math.max(lo, h[k + 1] - d); hiV = Math.min(hiV, h[k + 1] + d); }
-          if (j > 0) { lo = Math.max(lo, h[k - nx] - d); hiV = Math.min(hiV, h[k - nx] + d); }
-          if (j < nz - 1) { lo = Math.max(lo, h[k + nx] - d); hiV = Math.min(hiV, h[k + nx] + d); }
-          const v = Math.min(hiV, Math.max(lo, h[k])); if (Math.abs(v - h[k]) > 1e-4) { h[k] = v; changed++; }
-        }
-        if (!changed) break;
-      }
+      void MAX_SLOPE;
       gradeFixed = fixed;
     }
     // вырезка: под каждым домом земля не выше самой нижней поверхности модели — только внутри пятна стен
@@ -410,24 +396,25 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         }
         return Math.sqrt(best);
       };
-      void EDGE; void distToBoundary;
-      const outFixed = new Uint8Array(nx * nz);
+      void EDGE;
+      const relaxFixed = new Uint8Array(nx * nz); const shore = new Uint8Array(nx * nz); // полоса воды у берега: сглаживается, но не выше W − 0,2
       for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
         const x = x0 + i * step, z = z0 + j * step, k = j * nx + i;
-        if (inPoly(x, z, B)) { outFixed[k] = 1; continue; }
-        if (waterAt(x, z)) { h[k] = W - 0.6; outFixed[k] = 1; } else h[k] = Math.min(h[k], demLand(x, z));
+        if (inPoly(x, z, B)) { if (gradeFixed && gradeFixed[k]) relaxFixed[k] = 1; continue; }
+        if (waterAt(x, z)) { h[k] = W - 0.6; if (distToBoundary(x, z) > 8) relaxFixed[k] = 1; else shore[k] = 1; continue; }
+        h[k] = Math.min(h[k], demLand(x, z)); if (distToBoundary(x, z) > 30) relaxFixed[k] = 1;
       }
-      // ограничение уклона снаружи: земля окрестностей плавно поднимается к краю участка (внутри всё зафиксировано)
-      const d = 0.3 * step;
-      for (let pass = 0; pass < 400; pass++) {
-        let changed = 0;
+      // гладкая поверхность между зафиксированными клетками (Гаусс–Зейдель с верхней релаксацией): площадки домов,
+      // вода и дальние окрестности держат форму, газон между ними — плавный, без уступов и обрывов
+      const omega = 1.7;
+      for (let pass = 0; pass < 500; pass++) {
+        let maxd = 0;
         for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
-          const k = j * nx + i; if (outFixed[k]) continue;
-          let lo = -Infinity, hiV = Infinity;
-          lo = Math.max(lo, h[k - 1] - d, h[k + 1] - d, h[k - nx] - d, h[k + nx] - d); hiV = Math.min(hiV, h[k - 1] + d, h[k + 1] + d, h[k - nx] + d, h[k + nx] + d);
-          const v = Math.min(hiV, Math.max(lo, h[k])); if (Math.abs(v - h[k]) > 1e-4) { h[k] = v; changed++; }
+          const k = j * nx + i; if (relaxFixed[k]) continue;
+          const avg = (h[k - 1] + h[k + 1] + h[k - nx] + h[k + nx]) * 0.25; let v = h[k] + omega * (avg - h[k]); if (shore[k] && v > W - 0.2) v = W - 0.2;
+          const dd = Math.abs(v - h[k]); if (dd > maxd) maxd = dd; h[k] = v;
         }
-        if (!changed) break;
+        if (maxd < 0.002) break;
       }
     }
     // меш участка
@@ -477,24 +464,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       g.rotateX(-Math.PI / 2); g.translate(0, y - 0.3, 0); hg.push(g);
     }
     const nbHouses = hg.length ? mergeGeometries(hg, true) : null;
-    // подпорные стенки: там, где две площадки разной отметки стыкуются (перепад между соседними клетками > 0,35 м),
-    // вертикальная грань из камня — террасы вместо травяных обрывов
-    const wq: BufferGeometry[] = [];
-    if (gradeFixed && inHouseMask) for (let j = 0; j < nz - 1; j++) for (let i = 0; i < nx - 1; i++) {
-      const k = j * nx + i; const x = x0 + i * step, z = z0 + j * step;
-      if (!inPoly(x, z, c.site.boundary) && !inPoly(x0 + (i + 1) * step, z0 + (j + 1) * step, c.site.boundary)) continue;
-      for (const [k2, dx] of [[k + 1, 1], [k + nx, 0]] as [number, number][]) {
-        if (inHouseMask[k] || inHouseMask[k2]) continue;
-        const dh = h[k2] - h[k]; if (Math.abs(dh) < 0.35) continue;
-        const lo = Math.min(h[k], h[k2]) - 0.3, hiY = Math.max(h[k], h[k2]) + 0.02;
-        const g = new PlaneGeometry(step, hiY - lo); // вертикальная грань между центрами клеток
-        if (dx) { g.rotateY(dh > 0 ? -Math.PI / 2 : Math.PI / 2); g.translate(x + step / 2, (lo + hiY) / 2, z); }
-        else { if (dh < 0) g.rotateY(Math.PI); g.translate(x, (lo + hiY) / 2, z + step / 2); }
-        const uv = g.getAttribute('uv'); for (let q = 0; q < uv.count; q++) uv.setXY(q, uv.getX(q) * step / 1.5, uv.getY(q) * (hiY - lo) / 1.5);
-        wq.push(g);
-      }
-    }
-    const walls = wq.length ? mergeGeometries(wq, false) : null;
+    // подпорных стенок нет: заказчик просил сплошной плавный газон от фундамента к фундаменту
+    const walls: BufferGeometry | null = null; void inHouseMask;
     // дорожки: сеть по генплану (въезд → проезд между 2.x → дорога ряда 1.x → вилла 3), ленты 2,6 м по рельефу
     setStage('terrain:paths');
     const net = buildPathNetwork(houses, WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]);
@@ -590,6 +561,18 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
   const shopObj = useMemo(() => {
     const hAt = complexStore.heightAt; if (!shop || !built || !hAt) return null;
     let W = shop.size?.[0] ?? 9.5, D = shop.size?.[1] ?? 8.5;
+    // по указанию заказчика магазин отодвинут целиком на 15 м от ближайшей виллы в сторону границы участка
+    // (вдоль направления «от виллы», но не ближе 6 м к границе)
+    if (!shop.moved && data) {
+      const near = houses.map((hh) => new Vector3().setFromMatrixPosition(hh.matrix)).sort((a, b) => Math.hypot(a.x - shop.pos[0], a.z - shop.pos[1]) - Math.hypot(b.x - shop.pos[0], b.z - shop.pos[1]))[0];
+      const B = data.c.site.boundary; const distB = (x: number, z: number) => { let best = Infinity; for (let i = 0, j = B.length - 1; i < B.length; j = i++) { const [ax, az] = B[j], [bx, bz] = B[i]; const dx = bx - ax, dz = bz - az; const L2 = dx * dx + dz * dz; const t = L2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)) : 0; best = Math.min(best, Math.hypot(ax + t * dx - x, az + t * dz - z)); } return best; };
+      if (near) {
+        const dx = shop.pos[0] - near.x, dz = shop.pos[1] - near.z; const L = Math.hypot(dx, dz) || 1; let m = 15;
+        while (m > 0 && (!inPoly(shop.pos[0] + (dx / L) * m, shop.pos[1] + (dz / L) * m, B) || distB(shop.pos[0] + (dx / L) * m, shop.pos[1] + (dz / L) * m) < 6)) m -= 1;
+        shop.pos = [shop.pos[0] + (dx / L) * m, shop.pos[1] + (dz / L) * m];
+      }
+      shop.moved = true;
+    }
     // вход — по указанию заказчика: стена справа от прежнего стеклянного фасада (прежний фасад смотрел к старту прогулки),
     // то есть поворот на +90°; при нечётном повороте относительно пятна генплана ширина и глубина меняются местами
     const toSpawn = Math.atan2(WALK_SPAWN_XZ[0] - shop.pos[0], WALK_SPAWN_XZ[1] - shop.pos[1]);
