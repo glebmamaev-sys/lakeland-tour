@@ -29,7 +29,7 @@ const VILLAS: Record<string, { title: string; spawn: [number, number, number] }>
 
 type Mode = 'pano' | 'walk' | 'complex';
 const NO_HUD = new URLSearchParams(location.search).has('nohud'); // чистый кадр для съёмки
-const NO_POST = new URLSearchParams(location.search).has('nopost'); // без постобработки (AO, bloom)
+const POST = new URLSearchParams(location.search).has('post'); // постобработка (AO, bloom) — по флагу: на слабых машинах тормозит
 
 export default function App() {
   const [villaId, setVillaId] = useState<keyof typeof VILLAS>(() => {
@@ -88,7 +88,7 @@ export default function App() {
       <Canvas
         shadows
         camera={{ fov: 70, near: 0.05, far: 500 }}
-        dpr={[1, input.mobile ? 1.25 : 1.5]}
+        dpr={[1, 1.25]}
         gl={{ antialias: true, powerPreference: 'high-performance' }}
         onCreated={({ gl: r }) => { r.xr.enabled = true; setGl(r); (window as unknown as { __gl: unknown }).__gl = r; }}
       >
@@ -103,7 +103,7 @@ export default function App() {
             <ComplexSun walk={complexWalk} mobile={input.mobile} />
             <Suspense fallback={null}><ComplexScene walk={complexWalk} /></Suspense>
             <QualityWatch active={!complexLoading && colliderState !== 'building'} />
-            {!input.mobile && !NO_POST && !lowQ && (
+            {!input.mobile && POST && !lowQ && (
               <EffectComposer multisampling={4} enableNormalPass={false}>
                 <N8AO aoRadius={1.4} intensity={1.5} distanceFalloff={1.0} halfRes />
                 <Bloom luminanceThreshold={0.92} intensity={0.22} mipmapBlur radius={0.6} />

@@ -16,7 +16,7 @@ export function QualityWatch({ active }: { active: boolean }) {
   useFrame((_, dt) => {
     if (!active || quality.low || document.hidden) return;
     const a = acc.current; a.t += dt; a.n++;
-    if (a.t >= 1) { const avg = a.t / a.n; a.slow = avg > 0.045 ? a.slow + 1 : 0; a.t = 0; a.n = 0; if (a.slow >= 3) setLowQuality(true); }
+    if (a.t >= 1) { const avg = a.t / a.n; a.slow = avg > 0.034 ? a.slow + 1 : 0; a.t = 0; a.n = 0; if (a.slow >= 3) setLowQuality(true); }
   });
   return null;
 }

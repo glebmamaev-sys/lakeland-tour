@@ -720,7 +720,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       </group>
       {built && <><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>}
       {data && <Lagoon level={data.c.water_level} />}
-      {built && complexStore.heightAt && !lowQ && !new URLSearchParams(location.search).has('nograss') && <Grass heightAt={complexStore.heightAt} ok={built.grassOk} count={input.mobile ? 25_000 : 110_000} radius={input.mobile ? 22 : 36} />}
+      {built && complexStore.heightAt && !lowQ && !new URLSearchParams(location.search).has('nograss') && <Grass heightAt={complexStore.heightAt} ok={built.grassOk} count={Number(new URLSearchParams(location.search).get('grass')) || (input.mobile ? 15_000 : 45_000)} radius={input.mobile ? 18 : 26} />}
       {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} idlers={shopObj ? [shopObj.userData.receptionistWorld as { x: number; y: number; z: number; yaw: number }] : []} />}
     </group>
   );

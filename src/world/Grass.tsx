@@ -87,7 +87,7 @@ export function Grass({ heightAt, ok, count = 110_000, radius = 36 }: GrassProps
   });
   // ссылка на шейдер для uTime
   useEffect(() => { const prev = mat.onBeforeCompile; mat.onBeforeCompile = (sh, r) => { prev(sh, r); (mat as unknown as { __sh: unknown }).__sh = sh; }; mat.needsUpdate = true; }, [mat]);
-  return <instancedMesh ref={mesh} args={[geom, mat, count]} frustumCulled={false} receiveShadow />;
+  return <instancedMesh ref={mesh} args={[geom, mat, count]} frustumCulled={false} />; // без приёма теней: выборка карты теней на каждой травинке дорогая
 }
 
 export const GRASS_TINT = new Color('#7ea05a');
