@@ -123,6 +123,7 @@ const solidMat = new MeshStandardMaterial({ vertexColors: true, roughness: 0.95 
 function Instanced({ geometry, material, items, place }: { geometry: BufferGeometry; material: MeshStandardMaterial; items: Plant[]; place: (p: Plant, m: Matrix4) => void }) {
   const ref = useRef<InstancedMesh>(null);
   useEffect(() => {
+    if (!ref.current || !items.length) return; // пустой список: меш не рендерится, ref нет
     const m = new Matrix4(); items.forEach((p, i) => { place(p, m); ref.current!.setMatrixAt(i, m); });
     ref.current!.instanceMatrix.needsUpdate = true; ref.current!.computeBoundingSphere();
   }, [items, place]);
