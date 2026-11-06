@@ -1,7 +1,7 @@
 // Загружает GLB виллы из /models/<id>.glb, если он есть; иначе показывает заглушку.
 // После монтирования собирает коллайдер для контроллера.
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { Box3, BoxGeometry, Group, Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, Vector3 } from 'three';
+import { Box3, BoxGeometry, DoubleSide, Group, Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, Ray, Vector3 } from 'three';
 import type { RampHelper } from './models';
 import { useGLTF, useTexture } from '@react-three/drei';
 import { buildCollider, colliderStore } from './collider';
@@ -102,7 +102,9 @@ function GlbVilla({ id, onLoaded }: { id: string; onLoaded: () => void }) {
     let alive = true;
     loadPlan(id).then((plan) => {
       if (!alive || !plan || parent.getObjectByName('furniture')) return;
-      const gb = glassBoxes(scene); const furn = furnishVilla(plan, gb, cfg.passages ?? [], artTex(), detailMaps(tex.walnut), waterBoxes(scene));
+      const gb = glassBoxes(scene); const colT = buildCollider(scene); const rayS = new Ray(new Vector3(), new Vector3(0, -1, 0));
+      const support = colT ? (x: number, y: number, z: number) => { rayS.origin.set(x, y + 0.35, z); const hs = colT.bvh.raycast(rayS, DoubleSide); return hs.some((ht) => ht.distance < 0.9); } : null;
+      const furn = furnishVilla(plan, gb, cfg.passages ?? [], artTex(), detailMaps(tex.walnut), waterBoxes(scene), support); colT?.geometry.dispose();
       parent.add(furn); furn.updateMatrixWorld(true); onLoaded();
       if (import.meta.env.DEV && new URLSearchParams(location.search).has('plandebug')) void debugPlanImage(id, plan, gb, cfg.passages ?? []);
     });

@@ -187,7 +187,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const plan = data.plans[MODEL_IDS[k]];
       if (plan && !g.scene.getObjectByName('furniture')) {
         const t1 = performance.now();
-        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex(), detailMaps(tex.walnut), waterBoxes(g.scene));
+        const colT = buildCollider(g.scene); const rayS = new Ray(new Vector3(), new Vector3(0, -1, 0));
+        const support = colT ? (x: number, y: number, z: number) => { rayS.origin.set(x, y + 0.35, z); const hs = colT.bvh.raycast(rayS, DoubleSide); return hs.some((ht) => ht.distance < 0.9); } : null;
+        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex(), detailMaps(tex.walnut), waterBoxes(g.scene), support);
+        colT?.geometry.dispose();
         furn.applyMatrix4(g.scene.matrixWorld.clone().invert()); g.scene.add(furn); g.scene.updateMatrixWorld(true);
         console.info('[furniture]', MODEL_IDS[k], furn.children.map((m) => ((m as Mesh).geometry.getAttribute('position').count / 3) | 0), 'tris in', (performance.now() - t1) | 0, 'ms');
       }
@@ -291,9 +294,52 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const LC_N = 401, LC_STEP = 10, LC_HALF = 2000;
     const coverAt = (x: number, z: number) => { if (!cover) return 1; const i = Math.round((x + LC_HALF) / LC_STEP), j = Math.round((z + LC_HALF) / LC_STEP); return i < 0 || j < 0 || i >= LC_N || j >= LC_N ? 1 : cover[j * LC_N + i]; };
     const MN = c.dem.mask_n, mstep = (2 * c.dem.half) / (MN - 1);
+    // лагуна подведена к виллам: по замечанию заказчика от уреза воды до домов должно быть ~10 м (берег OSM дальше
+    // реального). Заливаем водой клетки между участком и лагуной: не ближе 10 м к любому дому, в пределах 250 м от
+    // воды OSM и на «водной» стороне (направление к ближайшей воде совпадает с направлением от центра комплекса)
+    const water2 = new Uint8Array(water); let lagoonFine: Uint8Array | null = null;
+    {
+      const dist = new Int32Array(MN * MN).fill(-1); const src = new Int32Array(MN * MN); const q: number[] = [];
+      for (let k = 0; k < MN * MN; k++) if (water[k] === 1) { dist[k] = 0; src[k] = k; q.push(k); }
+      for (let qi = 0; qi < q.length; qi++) { const k = q[qi]; const i = k % MN, j = (k - i) / MN;
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= MN || jj >= MN) continue; const k2 = jj * MN + ii; if (dist[k2] >= 0) continue; dist[k2] = dist[k] + 1; src[k2] = src[k]; q.push(k2); } }
+      const hp = houses.map((hh) => ({ m: hh.matrix.clone().invert(), fp: hh.fp }));
+      const shopB = c.buildings.find((b) => b.model === 'shop');
+      const dHouse = (x: number, z: number) => { let best = Infinity; const lp = new Vector3();
+        for (const { m, fp } of hp) { lp.set(x, 0, z).applyMatrix4(m); best = Math.min(best, Math.hypot(Math.max(fp[0] - lp.x, 0, lp.x - fp[2]), Math.max(fp[1] - lp.z, 0, lp.z - fp[3]))); }
+        if (shopB) best = Math.min(best, Math.max(0, Math.hypot(x - shopB.pos[0], z - shopB.pos[1]) - 7)); return best; };
+      const cx = houses.reduce((a, hh) => a + hh.matrix.elements[12], 0) / Math.max(1, houses.length), cz = houses.reduce((a, hh) => a + hh.matrix.elements[14], 0) / Math.max(1, houses.length);
+      let filled = 0;
+      for (let j = 0; j < MN; j++) for (let i = 0; i < MN; i++) {
+        const k = j * MN + i; if (water[k] === 1 || dist[k] < 0 || dist[k] * mstep > 250) continue;
+        const x = i * mstep - c.dem.half, z = j * mstep - c.dem.half; if (Math.hypot(x - cx, z - cz) > 220) continue;
+        const si = src[k] % MN, sj = (src[k] - si) / MN; const wx = si * mstep - c.dem.half - x, wz = sj * mstep - c.dem.half - z; const wl = Math.hypot(wx, wz) || 1;
+        const vx = x - cx, vz = z - cz; const vl = Math.hypot(vx, vz) || 1;
+        if ((wx * vx + wz * vz) / (wl * vl) < 0.2) continue;
+        if (dHouse(x, z) < 10) continue;
+        water2[k] = 1; filled++;
+      }
+      // только вода, связанная с лагуной (без отдельных «прудов» между домами)
+      const seen = new Uint8Array(MN * MN); const q2: number[] = [];
+      for (let k = 0; k < MN * MN; k++) if (water[k] === 1) { seen[k] = 1; q2.push(k); }
+      for (let qi = 0; qi < q2.length; qi++) { const k = q2[qi]; const i = k % MN, j = (k - i) / MN;
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= MN || jj >= MN) continue; const k2 = jj * MN + ii; if (seen[k2] || water2[k2] !== 1) continue; seen[k2] = 1; q2.push(k2); } }
+      for (let k = 0; k < MN * MN; k++) if (water2[k] === 1 && !seen[k]) water2[k] = 0;
+      console.info('[lagoon] подведена к виллам: залито клеток', filled, '(шаг', mstep, 'м)');
+      // тонкая береговая линия на сетке участка (0,5 м): грубая маска воды, расширенная на клетку, и ровно 10 м от домов
+      const S = c.site; lagoonFine = new Uint8Array(S.nx * S.nz);
+      const coarse = (x: number, z: number) => { const i = Math.round((x + c.dem.half) / mstep), j = Math.round((z + c.dem.half) / mstep); return i < 0 || j < 0 || i >= MN || j >= MN ? true : water2[j * MN + i] === 1; };
+      for (let j = 0; j < S.nz; j++) for (let i = 0; i < S.nx; i++) {
+        const x = S.x0 + i * S.step, z = S.z0 + j * S.step;
+        const near = coarse(x, z) || coarse(x + mstep, z) || coarse(x - mstep, z) || coarse(x, z + mstep) || coarse(x, z - mstep);
+        if (near && dHouse(x, z) >= 10) lagoonFine[j * S.nx + i] = 1;
+      }
+    }
     const waterAt = (x: number, z: number) => {
+      const S = c.site; const fi = Math.round((x - S.x0) / S.step), fj = Math.round((z - S.z0) / S.step);
+      if (lagoonFine && fi >= 0 && fj >= 0 && fi < S.nx && fj < S.nz) return lagoonFine[fj * S.nx + fi] === 1;
       const i = Math.round((x + c.dem.half) / mstep), j = Math.round((z + c.dem.half) / mstep);
-      return i < 0 || j < 0 || i >= MN || j >= MN ? true : water[j * MN + i] === 1;
+      return i < 0 || j < 0 || i >= MN || j >= MN ? true : water2[j * MN + i] === 1;
     };
     const W = c.water_level;
     const h = Float32Array.from(site);
@@ -401,7 +447,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const relaxFixed = new Uint8Array(nx * nz); const shore = new Uint8Array(nx * nz); // полоса воды у берега: сглаживается, но не выше W − 0,2
       for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
         const x = x0 + i * step, z = z0 + j * step, k = j * nx + i;
-        if (inPoly(x, z, B)) { if (gradeFixed && gradeFixed[k]) relaxFixed[k] = 1; continue; }
+        if (inPoly(x, z, B)) { if (waterAt(x, z) && !(gradeFixed && gradeFixed[k])) { h[k] = W - 0.6; shore[k] = 1; } else if (gradeFixed && gradeFixed[k]) relaxFixed[k] = 1; continue; }
         if (waterAt(x, z)) { h[k] = W - 0.6; if (distToBoundary(x, z) > 8) relaxFixed[k] = 1; else shore[k] = 1; continue; }
         h[k] = Math.min(h[k], demLand(x, z)); if (distToBoundary(x, z) > 30) relaxFixed[k] = 1;
       }
@@ -486,7 +532,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     }
     for (let k = 0; k < 900; k++) {
       const px = -95 + r() * 190, pz = -75 + r() * 150;
-      if (!inPoly(px, pz, c.site.boundary) || nearHouse(px, pz) || distToPaths(net, px, pz) < 2.5 || r() > 0.35) continue;
+      if (!inPoly(px, pz, c.site.boundary) || waterAt(px, pz) || nearHouse(px, pz) || distToPaths(net, px, pz) < 2.5 || r() > 0.35) continue;
       const y = siteAt(px, pz); if (y === null) continue;
       near.push({ x: px, y: y - 0.2, z: pz, s: r(), r: r() });
     }
@@ -498,13 +544,13 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       for (let z = fz0; z <= fz1; z += 2.6) { per.push([fx0 - 1.8, z]); per.push([fx1 + 1.8, z]); }
       for (const [lx, lz] of per) {
         if (r() > 0.6) continue;
-        const w = new Vector3(lx, 0, lz).applyMatrix4(hs.matrix); if (!inPoly(w.x, w.z, c.site.boundary) || distToPaths(net, w.x, w.z) < 1.8) continue;
+        const w = new Vector3(lx, 0, lz).applyMatrix4(hs.matrix); if (!inPoly(w.x, w.z, c.site.boundary) || waterAt(w.x, w.z) || distToPaths(net, w.x, w.z) < 1.8) continue;
         const y = siteAt(w.x, w.z); if (y === null) continue; shrubs.push({ x: w.x, y: y - 0.1, z: w.z, s: r(), r: r() });
       }
     }
     for (let k = 0; k < 500; k++) {
       const px = -95 + r() * 190, pz = -75 + r() * 150;
-      if (!inPoly(px, pz, c.site.boundary) || nearHouse(px, pz, 14) || distToPaths(net, px, pz) < 2 || r() > 0.5) continue;
+      if (!inPoly(px, pz, c.site.boundary) || waterAt(px, pz) || nearHouse(px, pz, 14) || distToPaths(net, px, pz) < 2 || r() > 0.5) continue;
       const y = siteAt(px, pz); if (y === null) continue; shrubs.push({ x: px, y: y - 0.1, z: pz, s: r(), r: r() });
     }
     for (const l of net.lines) for (let i = 0; i < l.length - 1; i++) {

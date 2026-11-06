@@ -161,19 +161,38 @@ export function makeBird(): { root: Group; wl: Mesh; wr: Mesh } {
   return { root, wl, wr };
 }
 export type Pose = 'walk' | 'idle' | 'swim' | 'mow' | 'wave' | 'lie' | 'water';
-/** Что говорят гости и садовник, когда к ним подходишь (по-английски). */
+/** Реплики по ролям (по-английски): гости, садовники, администратор. Клипы — public/audio/<role>_<f|m>_<i>.mp3. */
 export const GREETINGS = [
   'Hello there! So glad to see you in this little corner of paradise. Enjoy your stay at Lake Land!',
   'Welcome! It is wonderful to see you here, in our little piece of paradise by the lagoon.',
   'Hi! Great to see you. Isn\'t this place heavenly? Make yourself at home.',
   'Good day! So happy you came to visit this corner of paradise. Have a lovely walk!',
+  'Oh, hello! Lovely day for a walk, isn\'t it? Enjoy every minute here.',
+  'Hi there! Have you seen the lagoon at sunset yet? It is pure magic.',
+  'Welcome, friend! The pool is wonderful this afternoon. Come join us later!',
+  'Good to see you! This place feels like home already. I hope you love it as much as we do.',
+  'Hello! Take your time, breathe the sea air. You are on paradise time now.',
+  'Hey! If you are heading to the villas, the view from the upper terrace is stunning.',
+  'Hi! What a beautiful morning. Wishing you a wonderful stay at Lake Land.',
+  'Welcome! Everyone here is so friendly, you will feel at home in no time.',
 ];
+export const GREETINGS_GARDENER = [
+  'Good day! Just tending the lawn. The grass grows fast in this sun. Enjoy the gardens!',
+  'Hello there! Mind the sprinklers, the frangipani loves them. Have a lovely walk!',
+  'Welcome! Beautiful day to be outside, isn\'t it? The garden is at its best this time of year.',
+];
+export const GREETINGS_RECEPTION = [
+  'Welcome to Lake Land! I am at reception if you need anything: a map, a coffee, or just a chat.',
+  'Hello and welcome! So glad you found us. Shall I show you around the villas?',
+  'Good day! Welcome to our little corner of paradise. Make yourself at home, the coffee is on us.',
+];
+export type GreetRole = 'guest' | 'gardener' | 'reception';
+const ROLE_SETS: Record<GreetRole, { lines: string[]; prefix: string }> = { guest: { lines: GREETINGS, prefix: 'greet' }, gardener: { lines: GREETINGS_GARDENER, prefix: 'gard' }, reception: { lines: GREETINGS_RECEPTION, prefix: 'rec' } };
 let current: HTMLAudioElement | null = null;
-/** Озвучка реплики: записанный клип (нейросетевой голос, public/audio), если не загрузился — системный synthesis. */
-export function speak(text: string, female = true, index = 0, base = '') {
+export function speak(text: string, female = true, index = 0, base = '', prefix = 'greet') {
   try {
     if (current) { current.pause(); current = null; }
-    const a = new Audio(`${base}audio/greet_${female ? 'f' : 'm'}_${index}.mp3`); a.volume = 0.9; current = a;
+    const a = new Audio(`${base}audio/${prefix}_${female ? 'f' : 'm'}_${index}.mp3`); a.volume = 0.9; current = a;
     a.play().catch(() => speakSynth(text, female));
   } catch { speakSynth(text, female); }
 }
@@ -382,11 +401,11 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
   const playerTrack = useRef({ x: 0, z: 0, still: 0 });
   const greetingActive = useRef(false);
   const GREET_T = 6.5;
-  const tryGreet = (h: Human, cool: number, d: number): string | null => {
+  const tryGreet = (h: Human, cool: number, d: number, role: GreetRole = 'guest'): string | null => {
     const pos = h.root.position; const P = playerState.pos; if (!P || cool > 0 || greetingActive.current) return null;
     if (Math.hypot(P.x - pos.x, P.z - pos.z) > 3.2 || playerTrack.current.still < 0.5) return null;
-    const i = Math.floor(Math.random() * GREETINGS.length); const text = GREETINGS[i];
-    greetingActive.current = true; setBubble({ pos: [pos.x, pos.y + 2.05, pos.z], text }); speak(text, h.female, i, audioBase);
+    const set = ROLE_SETS[role]; const i = Math.floor(Math.random() * set.lines.length); const text = set.lines[i];
+    greetingActive.current = true; setBubble({ pos: [pos.x, pos.y + 2.05, pos.z], text }); speak(text, h.female, i, audioBase, set.prefix);
     setTimeout(() => { greetingActive.current = false; setBubble(null); }, GREET_T * 1000 - 200);
     void d; return text;
   };
@@ -436,7 +455,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     if (g) {
       const [x0, z0, x1, z1] = g.rect; const rowStep = 0.55;
       g.cool = Math.max(0, g.cool - d);
-      if (g.greet <= 0 && tryGreet(g.h, g.cool, d)) g.greet = GREET_T;
+      if (g.greet <= 0 && tryGreet(g.h, g.cool, d, 'gardener')) g.greet = GREET_T;
       if (g.greet > 0) { g.greet -= d; if (g.greet <= 0) g.cool = 40; animate(g.h, 'wave', t); g.yaw = faceTo(g.h.root.position, g.yaw, d); g.h.root.rotation.y = g.yaw; }
       else if (g.turning > 0) { g.turning -= d; animate(g.h, 'idle', t); }
       else {
@@ -459,7 +478,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     const wt = state.waterer;
     if (wt) {
       wt.cool = Math.max(0, wt.cool - d);
-      if (wt.greet <= 0 && tryGreet(wt.h, wt.cool, d)) wt.greet = GREET_T;
+      if (wt.greet <= 0 && tryGreet(wt.h, wt.cool, d, 'gardener')) wt.greet = GREET_T;
       if (wt.greet > 0) { wt.greet -= d; if (wt.greet <= 0) wt.cool = 40; animate(wt.h, 'wave', t); wt.yaw = faceTo(wt.h.root.position, wt.yaw, d); }
       else {
         const sp = wt.spots[wt.i]; const tx = sp.x + 0.9, tz = sp.z; const dist = Math.hypot(tx - wt.x, tz - wt.z);
@@ -476,7 +495,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     }
     for (const st of state.standing) {
       st.cool = Math.max(0, st.cool - d);
-      if (st.greet <= 0 && tryGreet(st.h, st.cool, d)) st.greet = GREET_T;
+      if (st.greet <= 0 && tryGreet(st.h, st.cool, d, 'reception')) st.greet = GREET_T;
       if (st.greet > 0) { st.greet -= d; if (st.greet <= 0) st.cool = 40; animate(st.h, 'wave', t); st.cur = faceTo(st.h.root.position, st.cur, d); }
       else { animate(st.h, 'idle', t + st.h.opts.seed!); let dy = st.yaw - st.cur; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); st.cur += dy * Math.min(1, d * 3); }
       st.h.root.position.set(st.x, st.y, st.z); st.h.root.rotation.y = st.cur;
