@@ -22,8 +22,10 @@ export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6
   };
   const fx = Uint8Array.from(fixed), ht = Float32Array.from(h), best = new Float32Array(N).fill(Infinity), corridor = new Uint8Array(N);
   const steps: Step[] = []; let flights = 0; const ribbons: BufferGeometry[] = [];
+  let li = -1;
   for (const line of net.lines) {
-    if (line.length < 2) continue;
+    li++; if (line.length < 2) continue;
+    const lift = 0.1 + (li % 8) * 0.004; // ленты пересекающихся дорожек — на разной высоте (±3 см), иначе на стыках z-fighting
     const curve = new CatmullRomCurve3(line, false, 'catmullrom', 0.3); const L = curve.getLength(); const n = Math.max(2, Math.ceil(L / DS)); const ds = L / n;
     const pts = curve.getSpacedPoints(n); const t = pts.map((p) => sample(p.x, p.z));
     const w = Math.round(SMOOTH / ds); const gp = t.map((_, i) => { let a = 0, c = 0; for (let k = -w; k <= w; k++) { const j = i + k; if (j >= 0 && j <= n) { a += t[j]; c++; } } return a / c; });
@@ -59,7 +61,7 @@ export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6
         const p = pts[s]; const tg = curve.getTangentAt(Math.min(1, sm / L)); const tl = Math.hypot(tg.x, tg.z) || 1; const sx = (-tg.z / tl) * width / 2, sz = (tg.x / tl) * width / 2;
         if (s) v += ds / width;
         const cur = P.length / 3;
-        P.push(p.x - sx, gp[s] + 0.1, p.z - sz, p.x + sx, gp[s] + 0.1, p.z + sz); U.push(0, v, 1, v); Nn.push(0, 1, 0, 0, 1, 0);
+        P.push(p.x - sx, gp[s] + lift, p.z - sz, p.x + sx, gp[s] + lift, p.z + sz); U.push(0, v, 1, v); Nn.push(0, 1, 0, 0, 1, 0);
         if (prevIdx >= 0) idx.push(prevIdx, prevIdx + 1, cur, prevIdx + 1, cur + 1, cur);
         prevIdx = cur;
       }
