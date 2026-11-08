@@ -213,9 +213,8 @@ function furnishLiving(p: Placer, r: RoomInfo, seed: number) {
     if (ok) break;
   }
   if (!ok) { // совсем тесно: пара кресел и столик у центра зоны
-    const c = r.cx, d = r.cz; (p as unknown as { note: string }).note = 'chairs';
-    if (p.put(F.armchair(false), c - 0.8, d, Math.PI / 2, 0.85, 0.85)) { p.put(F.armchair(true), c + 0.8, d, -Math.PI / 2, 0.85, 0.85); p.put(F.sideTable(), c, d, 0, 0.5, 0.5); return; }
-    // проходная зона: хотя бы растение в кадке у центра
+    // маленькая «зона отдыха» без места под диван — это проходной холл (лестница, двери): кресла посреди прохода мешают;
+    // только растение в свободном углу
     if (p.putPlant(F.pottedPlant('kentia'), 0.6)) (p as unknown as { note: string }).note = 'plant';
     return;
   }
