@@ -314,13 +314,13 @@ export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number
   const r = rng(seed); let best: { s: number; rect: [number, number, number, number] } | null = null;
   const dbg = { site: 0, house: 0, path: 0, null: 0, slope: 0, ok: 0 }; (window as unknown as { __lawnDbg: unknown }).__lawnDbg = dbg;
   for (let k = 0; k < 1500; k++) {
-    const cx = -90 + r() * 180, cz = -70 + r() * 140; const w = 10, d = 7;
+    const cx = -90 + r() * 180, cz = -70 + r() * 140; const w = 8, d = 6;
     const corners: [number, number][] = [[cx - w / 2, cz - d / 2], [cx + w / 2, cz - d / 2], [cx - w / 2, cz + d / 2], [cx + w / 2, cz + d / 2], [cx, cz]];
     if (!corners.every(([x, z]) => inSite(x, z))) { dbg.site++; continue; }
-    const dh = Math.min(...corners.map(([x, z]) => distToHouses(houses, x, z))); if (dh < 3) { dbg.house++; continue; }
+    const dh = Math.min(...corners.map(([x, z]) => distToHouses(houses, x, z))); if (dh < 4) { dbg.house++; continue; } // не под террасами и фундаментами
     const dp = Math.min(...corners.map(([x, z]) => distToPaths(net, x, z))); if (dp < 2.5) { dbg.path++; continue; }
     const hs = corners.map(([x, z]) => heightAt(x, z)); if (hs.some((v) => v === null)) { dbg.null++; continue; }
-    const range = Math.max(...(hs as number[])) - Math.min(...(hs as number[])); if (range > 1.2) { dbg.slope++; continue; }
+    const range = Math.max(...(hs as number[])) - Math.min(...(hs as number[])); if (range > 1.6) { dbg.slope++; continue; }
     dbg.ok++;
     const s = Math.min(dh, 10) + Math.min(dp, 6) - range * 3;
     if (!best || s > best.s) best = { s, rect: [cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2] };

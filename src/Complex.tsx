@@ -6,8 +6,8 @@ import { useThree } from '@react-three/fiber';
 import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, ExtrudeGeometry,
-  Float32BufferAttribute, Group, LOD, Matrix4, Mesh, MeshStandardMaterial,
-  Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3,
+  Float32BufferAttribute, Group, LOD, Matrix4, Mesh, MeshStandardMaterial, type Object3D,
+  Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3, type Intersection,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { applyMaterialRules, openDoors } from './materials';
@@ -98,6 +98,20 @@ function moveShop(shop: Placement, houses: HouseInfo[], B: [number, number][]) {
   }
   shop.moved = true;
 }
+/** Положение магазина: сдвиг от виллы, поворот входом по указанию заказчика, размеры с учётом поворота, точка перед дверью. */
+function shopPose(shop: Placement, houses: HouseInfo[], B: [number, number][]) {
+  moveShop(shop, houses, B);
+  let W = shop.size?.[0] ?? 9.5, D = shop.size?.[1] ?? 8.5;
+  // вход — по указанию заказчика: стена справа от прежнего стеклянного фасада (прежний фасад смотрел к старту прогулки),
+  // то есть поворот на +90°; при нечётном повороте относительно пятна генплана ширина и глубина меняются местами
+  const toSpawn = Math.atan2(WALK_SPAWN_XZ[0] - shop.pos[0], WALK_SPAWN_XZ[1] - shop.pos[1]);
+  const yaw0 = [0, 1, 2, 3].map((k) => -shop.rot + k * Math.PI / 2).sort((a, b) => Math.cos(b - toSpawn) - Math.cos(a - toSpawn))[0];
+  const yaw = yaw0 + Math.PI / 2;
+  const kq = ((Math.round((yaw + shop.rot) / (Math.PI / 2)) % 4) + 4) % 4; if (kq % 2) { const t = W; W = D; D = t; }
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);
+  const door: [number, number] = [shop.pos[0] + fx * (D / 2 + 2.6), shop.pos[1] + fz * (D / 2 + 2.6)];
+  return { pos: shop.pos, yaw, W, D, fx, fz, door, r: Math.hypot(W, D) / 2 + 1.2 };
+}
 type ComplexData = {
   water_level: number;
   site: { x0: number; z0: number; step: number; nx: number; nz: number; boundary: [number, number][]; paths: [number, number][][] };
@@ -159,6 +173,40 @@ function siteSampler(c: ComplexData, h: Float32Array) {
   };
 }
 
+/** Сантехника из Revit пришла с «деревянным» материалом (серый 0,5 → орех): ванны и раковины в санузлах (комнаты
+ *  «Toilet & Bath» плана, коробка вокруг метки) из мешей роли walnut отделяются в белый глянцевый акрил. */
+function whitenBath(scene: Object3D, plan: Plan) {
+  const boxes: Box3[] = [];
+  for (const l of plan.levels) for (const r of l.rooms) {
+    if (!r.name.toLowerCase().includes('toilet & bath')) continue;
+    const half = Math.max(1.6, Math.sqrt(r.area ?? 6) * 0.8);
+    boxes.push(new Box3(new Vector3(r.x - half, l.level - 0.3, r.z - half), new Vector3(r.x + half, l.level + 2.3, r.z + half)));
+  }
+  if (!boxes.length) return;
+  const acrylic = new MeshStandardMaterial({ color: '#f7f6f2', roughness: 0.12, metalness: 0, side: DoubleSide });
+  const targets: Mesh[] = []; scene.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.userData.role === 'walnut') targets.push(m); });
+  for (const m of targets) {
+    const inside = splitOutBoxes(m, boxes); if (!inside) continue;
+    const nm = new Mesh(inside, acrylic); nm.position.copy(m.position); nm.quaternion.copy(m.quaternion); nm.scale.copy(m.scale);
+    nm.userData.role = 'default'; nm.castShadow = true; nm.receiveShadow = true; nm.name = m.name + '-bath'; m.parent?.add(nm);
+  }
+}
+/** Вырезает из меша треугольники с центром (мир) внутри любой из коробок: возвращает их геометрию, меш остаётся без них. */
+function splitOutBoxes(m: Mesh, boxes: Box3[]): BufferGeometry | null {
+  const g = m.geometry, pos = g.getAttribute('position') as BufferAttribute, uv = g.getAttribute('uv') as BufferAttribute | undefined, idx = g.index;
+  const n = idx ? idx.count / 3 : pos.count / 3; m.updateWorldMatrix(true, false);
+  const PI: number[] = [], UI: number[] = [], PO: number[] = [], UO: number[] = []; const w = new Vector3(), c = new Vector3();
+  for (let t = 0; t < n; t++) {
+    const ids = [0, 1, 2].map((k) => (idx ? idx.getX(t * 3 + k) : t * 3 + k));
+    c.set(0, 0, 0); for (const i of ids) { w.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(m.matrixWorld); c.addScaledVector(w, 1 / 3); }
+    const inside = boxes.some((b) => b.containsPoint(c));
+    const P = inside ? PI : PO, U = inside ? UI : UO;
+    for (const i of ids) { P.push(pos.getX(i), pos.getY(i), pos.getZ(i)); if (uv) U.push(uv.getX(i), uv.getY(i)); }
+  }
+  if (!PI.length) return null;
+  const mk = (P: number[], U: number[]) => { const ng = new BufferGeometry(); ng.setAttribute('position', new Float32BufferAttribute(P, 3)); if (uv) ng.setAttribute('uv', new Float32BufferAttribute(U, 2)); ng.computeVertexNormals(); return ng; };
+  m.geometry = mk(PO, UO); return mk(PI, UI);
+}
 /** Новая геометрия меша только из треугольников, центр которых (в мировых x,z) внутри box. */
 function keepInside(m: Mesh, box: Box3): BufferGeometry {
   const g = m.geometry, pos = g.getAttribute('position') as BufferAttribute, uv = g.getAttribute('uv') as BufferAttribute | undefined, idx = g.index;
@@ -222,6 +270,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         furn.applyMatrix4(g.scene.matrixWorld.clone().invert()); g.scene.add(furn); g.scene.updateMatrixWorld(true);
         console.info('[furniture]', MODEL_IDS[k], furn.children.map((m) => ((m as Mesh).geometry.getAttribute('position').count / 3) | 0), 'tris in', (performance.now() - t1) | 0, 'ms');
       }
+      if (plan && !g.scene.userData.bathDone) { whitenBath(g.scene, plan); g.scene.userData.bathDone = true; }
       const low = lows[k].scene;
       if (!low.userData.prepared) {
         low.rotation.set(...cfg0.rotation); low.position.set(...cfg0.offset); low.updateMatrixWorld(true);
@@ -419,9 +468,12 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           if (lp.x > fx0 - 0.4 && lp.x < fx1 + 0.4 && lp.z > fz0 - 0.4 && lp.z < fz1 + 0.4) inHouseMask[k] = 1;
           if (range) {
             ray.origin.set(x, 80, z).applyMatrix4(inv); ray.direction.set(0, -1, 0).transformDirection(inv);
-            const hits = gb.bvh.raycast(ray, DoubleSide); if (!hits.length) continue;
-            top = -Infinity; for (const ht of hits) top = Math.max(top, 80 - ht.distance);
-            top = Math.min(floorY + range[1], Math.max(floorY + range[0], top));
+            const hits = gb.bvh.raycast(ray, DoubleSide);
+            if (hits.length) { top = -Infinity; for (const ht of hits) top = Math.max(top, 80 - ht.distance); top = Math.min(floorY + range[1], Math.max(floorY + range[0], top)); }
+            // рельеф Revit под домом вырезан: клетка всё равно фиксируется (не ниже нижнего пола), отметку полов
+            // комнат ей даст вырезка под полами ниже; раньше такие клетки оставались свободными, и мембрана
+            // проводила сквозь комнаты гладкий склон — газон внутри санузлов виллы 1
+            else top = Math.max(h[k], floorY - 0.05);
           }
           h[k] = fixed[k] ? Math.min(h[k], top) : top; fixed[k] = 1; // стык двух площадок — по нижней
         }
@@ -439,15 +491,24 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       void MAX_SLOPE;
       gradeFixed = fixed;
     }
-    // вырезка: под каждым домом земля не выше самой нижней поверхности модели — только внутри пятна стен
-    // (без запаса 1,2 м: иначе свесы крыш и террас прорезают траншею вокруг дома)
-    const lpv = new Vector3();
+    // вырезка: под каждым домом земля не выше самой нижней ПОВЕРХНОСТИ ПОЛА модели (грани нормалью вверх: плиты
+    // террас, полы, борта бассейнов) — по всему пятну дома с запасом 0,6 м. Нижние грани плит и свесы не считаются,
+    // иначе вдоль консольных террас и карнизов получалась траншея; вода не считается — её плоскости шире чаш
+    const lpv = new Vector3(); const lowMask = new Uint8Array(nx * nz), footMask = new Uint8Array(nx * nz);
     for (const inst of instances) {
       inst.updateMatrixWorld(true);
       const hi = houses.find((x) => x.id === inst.name.slice('house-'.length)); if (!hi) continue;
-      const [fx0, fz0, fx1, fz1] = hi.fp; const inFoot = (x: number, z: number) => { lpv.set(x, 0, z); inst.worldToLocal(lpv); return lpv.x > fx0 + 1.2 && lpv.x < fx1 - 1.2 && lpv.z > fz0 + 1.2 && lpv.z < fz1 - 1.2; };
-      const col = buildCollider(inst);
+      const [fx0, fz0, fx1, fz1] = hi.fp; const inFoot = (x: number, z: number) => { lpv.set(x, 0, z); inst.worldToLocal(lpv); return lpv.x > fx0 + 0.6 && lpv.x < fx1 - 0.6 && lpv.z > fz0 + 0.6 && lpv.z < fz1 - 0.6; };
+      const col = buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => m.userData.role === 'water' || m.userData.role === 'ground' || m.userData.role === 'terrain' || m.userData.role === 'glass' || m.userData.role === 'plants'));
       if (!col) continue;
+      let lowered = 0; const cp = col.geometry.getAttribute('position') as BufferAttribute; const e1 = new Vector3(), e2 = new Vector3(), nrm = new Vector3(), v0 = new Vector3();
+      // нормаль треугольника по индексу грани (геометрия коллайдера неиндексированная, мировые координаты)
+      const upFacing = (ht: Intersection) => {
+        if (ht.face && ht.face.normal) return ht.face.normal.y > 0.5;
+        if (ht.faceIndex === undefined || ht.faceIndex === null) return true;
+        const f = ht.faceIndex * 3; v0.fromBufferAttribute(cp, f); e1.fromBufferAttribute(cp, f + 1).sub(v0); e2.fromBufferAttribute(cp, f + 2).sub(v0); nrm.crossVectors(e1, e2);
+        return nrm.y > 0.5 * nrm.length(); // грань нормалью вверх (обход против часовой)
+      };
       col.geometry.computeBoundingBox(); const bb = col.geometry.boundingBox!;
       const ray = new Ray(new Vector3(), new Vector3(0, -1, 0));
       const i0 = Math.max(0, Math.floor((bb.min.x - x0) / step) - 1), i1 = Math.min(nx - 1, Math.ceil((bb.max.x - x0) / step) + 1);
@@ -457,13 +518,41 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         ray.origin.set(x0 + i * step, 80, z0 + j * step);
         const hits = col.bvh.raycast(ray, DoubleSide);
         if (!hits.length) continue;
-        let low = Infinity; for (const ht of hits) low = Math.min(low, 80 - ht.distance);
-        const k = j * nx + i; if (h[k] > low - 0.08) h[k] = low - 0.08;
+        let low = Infinity; for (const ht of hits) if (upFacing(ht)) low = Math.min(low, 80 - ht.distance);
+        const k = j * nx + i; footMask[k] = 1; if (h[k] > low - 0.05) { h[k] = low - 0.05; lowered++; lowMask[k] = 1; }
       }
+      console.info('[floors]', hi.id, 'земля опущена под полами в', lowered, 'клетках');
       col.geometry.dispose();
     }
-    const net = buildPathNetwork(houses, WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]);
+    // клетки под стенами (луч сверху упирается в верх стены) и прочие неопущенные клетки пятна дома берут отметку
+    // соседней опущенной клетки — иначе сетка 0,5 м «вздувается» газоном вдоль стен внутри комнат
+    // один проход (толщина стены ≤ 1 клетки): дальше наружу — уже улица, там должен остаться уличный рельеф
+    for (let pass = 0; pass < 1; pass++) {
+      let changed = 0;
+      for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+        const k = j * nx + i; if (!footMask[k] || lowMask[k]) continue;
+        let v = Infinity; for (const n of [k - 1, k + 1, k - nx, k + nx]) if (lowMask[n]) v = Math.min(v, h[n]);
+        if (v < h[k] - 0.02) { h[k] = v; lowMask[k] = 1; changed++; }
+      }
+      if (!changed) break;
+    }
+    // дорожка начинается перед дверью магазина (он сдвинут на 15 м, прежняя точка въезда оказалась внутри него) и обходит его
+    const shopP = c.buildings.find((b) => b.model === 'shop'); const pose = shopP ? shopPose(shopP, houses, c.site.boundary) : null;
+    const net = buildPathNetwork(houses, pose ? pose.door : (WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]),
+      pose ? { x: pose.pos[0], z: pose.pos[1], r: pose.r, toward: WALK_SPAWN_XZ } : undefined);
     let terr: Terraces | null = null;
+    // под магазином земля не выше его пола: пол ставится по отметке у двери (+0,12), цоколь 1,8 м прячет перепад;
+    // пятно магазина опускается на 0,5 м ниже отметки у двери и фиксируется, пятачок у двери фиксируется как есть
+    if (pose && gradeFixed) {
+      const sAt0 = siteSampler(c, h); const [sx, sz] = pose.pos; const dX = sx + pose.fx * (pose.D / 2 + 1.2), dZ = sz + pose.fz * (pose.D / 2 + 1.2);
+      const doorH = sAt0(dX, dZ); const cs = Math.cos(pose.yaw), sn = Math.sin(pose.yaw);
+      if (doorH !== null) for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+        const x = x0 + i * step, z = z0 + j * step; const k = j * nx + i;
+        if (Math.hypot(x - dX, z - dZ) < 1.6) { gradeFixed[k] = 1; continue; }
+        const lx = (x - sx) * cs - (z - sz) * sn, lz = (x - sx) * sn + (z - sz) * cs;
+        if (Math.abs(lx) < pose.W / 2 + 0.8 && Math.abs(lz) < pose.D / 2 + 0.8) { h[k] = Math.min(h[k], doorH - 0.5); gradeFixed[k] = 1; }
+      }
+    }
     // за границей участка сетка повторяет окрестности: вода — ниже уровня, суша — рельеф SRTM;
     // внутри, в полосе EDGE м вдоль границы, участок плавно сходит к окрестностям (иначе на стыке уступ)
     {
@@ -489,7 +578,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
         const x = x0 + i * step, z = z0 + j * step, k = j * nx + i;
         const wet = waterAt(x, z); const bed = bedAt(k); const shallow = dShore[k] >= 0 && dShore[k] * step <= 2.5;
-        if (inPoly(x, z, B)) { if (wet && !(gradeFixed && gradeFixed[k])) { h[k] = bed; if (shallow) shore[k] = 1; else relaxFixed[k] = 1; } else if (gradeFixed && gradeFixed[k]) relaxFixed[k] = 1; continue; }
+        // площадки домов зафиксированы и за границей участка тоже: вилла 1.1 частично выходит за контур генплана, и
+        // без этого мембрана поднимала землю внутрь её санузла и оставляла провалы под плитой
+        if (gradeFixed && gradeFixed[k]) { relaxFixed[k] = 1; continue; }
+        if (inPoly(x, z, B)) { if (wet) { h[k] = bed; if (shallow) shore[k] = 1; else relaxFixed[k] = 1; } continue; }
         if (wet) { h[k] = bed; if (!shallow || distToBoundary(x, z) > 8) relaxFixed[k] = 1; else shore[k] = 1; continue; }
         h[k] = Math.min(h[k], demLand(x, z)); if (distToBoundary(x, z) > 30) relaxFixed[k] = 1;
       }
@@ -687,17 +779,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
   // магазин у въезда: достроен процедурно (Shop.ts), фасадом к старту прогулки, пол по рельефу у двери
   const shopObj = useMemo(() => {
     const hAt = complexStore.heightAt; if (!shop || !built || !hAt) return null;
-    let W = shop.size?.[0] ?? 9.5, D = shop.size?.[1] ?? 8.5;
-    // по указанию заказчика магазин отодвинут целиком на 15 м от ближайшей виллы в сторону границы участка
-    // (вдоль направления «от виллы», но не ближе 6 м к границе)
-    if (data) moveShop(shop, houses, data.c.site.boundary);
-    // вход — по указанию заказчика: стена справа от прежнего стеклянного фасада (прежний фасад смотрел к старту прогулки),
-    // то есть поворот на +90°; при нечётном повороте относительно пятна генплана ширина и глубина меняются местами
-    const toSpawn = Math.atan2(WALK_SPAWN_XZ[0] - shop.pos[0], WALK_SPAWN_XZ[1] - shop.pos[1]);
-    const yaw0 = [0, 1, 2, 3].map((k) => -shop.rot + k * Math.PI / 2).sort((a, b) => Math.cos(b - toSpawn) - Math.cos(a - toSpawn))[0];
-    const yaw = yaw0 + Math.PI / 2;
-    const kq = ((Math.round((yaw + shop.rot) / (Math.PI / 2)) % 4) + 4) % 4; if (kq % 2) { const t = W; W = D; D = t; }
-    const fx = Math.sin(yaw), fz = Math.cos(yaw);
+    const pose = shopPose(shop, houses, data!.c.site.boundary); const { W, D, yaw, fx, fz } = pose;
     const door = hAt(shop.pos[0] + fx * (D / 2 + 1.2), shop.pos[1] + fz * (D / 2 + 1.2)) ?? shop.floor;
     const front = hAt(shop.pos[0] + fx * (D / 2 + 3), shop.pos[1] + fz * (D / 2 + 3)) ?? door;
     const centre = hAt(shop.pos[0], shop.pos[1]) ?? door;
@@ -706,12 +788,18 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     g.position.set(shop.pos[0], y, shop.pos[1]); g.rotation.y = yaw; g.updateMatrixWorld(true);
     const rp = (g.userData.receptionist as Vector3).clone().applyMatrix4(g.matrixWorld);
     g.userData.receptionistWorld = { x: rp.x, y: rp.y, z: rp.z, yaw: yaw }; // смотрит к входу (+z локально)
+    g.userData.size = [W, D];
     g.userData.customersWorld = (g.userData.customers as { x: number; z: number; yaw: number; anim: string; char: string }[]).map((c) => { const v = new Vector3(c.x, 0, c.z).applyMatrix4(g.matrixWorld); return { x: v.x, y: v.y, z: v.z, yaw: c.yaw + yaw, anim: c.anim, char: c.char, role: 'guest' }; });
     shop.floor = y;
     return g;
   }, [shop, built, tex]);
   const idlerSpecs = useMemo<IdlerSpec[]>(() => shopObj ? [{ ...(shopObj.userData.receptionistWorld as { x: number; y: number; z: number; yaw: number }), char: 'f_formal', role: 'reception', anim: 'idle' }, ...(shopObj.userData.customersWorld as IdlerSpec[])] : [], [shopObj]);
   const terraceSpots = useMemo(() => houses.flatMap((hh) => hh.spots), [houses]);
+  // для персонажей магазин — тоже «дом»: газон для косилки и кусты для полива не выбираются у его стен
+  const housesNpc = useMemo<{ fp: [number, number, number, number]; matrix: Matrix4 }[]>(() => {
+    if (!shopObj) return houses; const [W, D] = shopObj.userData.size as [number, number];
+    return [...houses, { fp: [-W / 2 - 1, -D / 2 - 1, W / 2 + 1, D / 2 + 1], matrix: shopObj.matrixWorld.clone() }];
+  }, [houses, shopObj]);
   const grass = tex.grass;
   // газон: плитка травы + крупный шум (убирает повторы) через onBeforeCompile
   // вариации травы шумом; под водой (y < уровня) — бегущая каустика на песчаном дне, затухает с глубиной
@@ -806,7 +894,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       {data && <Lagoon level={data.c.water_level} bottom={built?.bottom ?? null} />}
       {data && built && <Lotuses items={built.lotus} level={data.c.water_level} />}
       {built && complexStore.heightAt && !lowQ && !new URLSearchParams(location.search).has('nograss') && <Grass heightAt={complexStore.heightAt} ok={built.grassOk} count={Number(new URLSearchParams(location.search).get('grass')) || (input.mobile ? 15_000 : 45_000)} radius={input.mobile ? 18 : 26} />}
-      {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} idlers={idlerSpecs} terraceSpots={terraceSpots} />}
+      {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={housesNpc} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} idlers={idlerSpecs} terraceSpots={terraceSpots} />}
     </group>
   );
 }

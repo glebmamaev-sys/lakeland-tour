@@ -8,7 +8,7 @@ export type PathNet = { lines: Vector3[][]; nodes: Vector3[] };
 const L = (h: HouseLite, x: number, z: number) => new Vector3(x, 0, z).applyMatrix4(h.matrix);
 
 /** Сеть дорожек в мировых координатах (y = 0, высота берётся при построении ленты). */
-export function buildPathNetwork(houses: HouseLite[], entrance: [number, number]): PathNet {
+export function buildPathNetwork(houses: HouseLite[], entrance: [number, number], avoid?: { x: number; z: number; r: number; toward: [number, number] }): PathNet {
   const H = (id: string) => houses.find((h) => h.id === id)!;
   const lines: Vector3[][] = [];
   const E = new Vector3(entrance[0], 0, entrance[1]);
@@ -17,7 +17,19 @@ export function buildPathNetwork(houses: HouseLite[], entrance: [number, number]
   // проезд от въезда между 2.1/2.2 (запад) и 2.3 (восток) до дороги ряда 1.x
   const p21 = L(H('2.1'), 8, 17), p22 = L(H('2.2'), 8, 17), p23 = L(H('2.3'), 8, 17);
   const mid1 = p21.clone().add(p23).multiplyScalar(0.5), mid2 = p22.clone().add(p23).multiplyScalar(0.5);
-  const main = [E, mid1, mid2, row1[1]];
+  // от двери магазина: если прямая к проезду задевает сам магазин — обход вдоль его стены (со стороны старта прогулки)
+  const main = [E];
+  if (avoid) {
+    const dx = mid1.x - E.x, dz = mid1.z - E.z; const L2 = dx * dx + dz * dz || 1;
+    const t = Math.max(0, Math.min(1, ((avoid.x - E.x) * dx + (avoid.z - E.z) * dz) / L2));
+    const cx = E.x + dx * t, cz = E.z + dz * t;
+    if (Math.hypot(cx - avoid.x, cz - avoid.z) < avoid.r) {
+      const L = Math.sqrt(L2); let nx = -dz / L, nz = dx / L;
+      if (nx * (avoid.toward[0] - avoid.x) + nz * (avoid.toward[1] - avoid.z) < 0) { nx = -nx; nz = -nz; }
+      main.push(new Vector3(avoid.x + nx * (avoid.r + 1.5), 0, avoid.z + nz * (avoid.r + 1.5)));
+    }
+  }
+  main.push(mid1, mid2, row1[1]);
   lines.push(main);
   lines.push(row1);
   // к вилле 3: от конца ряда к её северной террасе
@@ -35,10 +47,10 @@ export function buildPathNetwork(houses: HouseLite[], entrance: [number, number]
 }
 
 /** Лента дорожки по сглаженной кривой, прилегает к рельефу (+lift), UV: u поперёк 0..1, v вдоль (м / width). */
-export function pathRibbon(line: Vector3[], width: number, heightAt: (x: number, z: number) => number | null, lift = 0.06): BufferGeometry | null {
+export function pathRibbon(line: Vector3[], width: number, heightAt: (x: number, z: number) => number | null, lift = 0.1): BufferGeometry | null {
   if (line.length < 2) return null;
   const curve = new CatmullRomCurve3(line, false, 'catmullrom', 0.3);
-  const len = curve.getLength(); const n = Math.max(2, Math.ceil(len / 1.0));
+  const len = curve.getLength(); const n = Math.max(2, Math.ceil(len / 0.5)); // шаг 0,5 м = шаг сетки рельефа: газон не проступает между опорными точками
   const pts = curve.getSpacedPoints(n);
   const P: number[] = [], U: number[] = [], N: number[] = []; const idx: number[] = [];
   let v = 0;
