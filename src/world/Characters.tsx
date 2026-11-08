@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import { playerState } from '../Player';
-import { Box3, BoxGeometry, BufferAttribute, BufferGeometry, Color, CylinderGeometry, DoubleSide, Group, Matrix4, Mesh, MeshStandardMaterial, SphereGeometry, Vector3 } from 'three';
+import { Box3, BoxGeometry, BufferAttribute, BufferGeometry, Color, CylinderGeometry, DoubleSide, Group, Matrix4, Mesh, MeshStandardMaterial, Quaternion, SphereGeometry, Vector3 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { AnimationMixer, LoopRepeat, type AnimationAction, type AnimationClip, type Object3D } from 'three';
@@ -43,7 +43,7 @@ export function makeSkinnedHuman(g: CharGltf, female: boolean, seed = 1): Human 
   const mixer = new AnimationMixer(model); const actions: Record<string, AnimationAction> = {};
   for (const c of g.animations) { const a = mixer.clipAction(c); a.setLoop(LoopRepeat, Infinity); actions[c.name] = a; }
   const idle = actions.Idle_Neutral ?? actions.Idle; if (idle) { idle.play(); }
-  const hand = model.getObjectByName('Wrist.R') ?? null;
+  const hand = model.getObjectByName('Wrist.R') ?? model.getObjectByName('WristR') ?? null; // GLTFLoader убирает точки из имён узлов
   const dummy = new Group();
   return { root, body: new Mesh(), armL: dummy, armR: dummy, legL: dummy, legR: dummy, opts: { seed }, female, skin: { mixer, actions, cur: idle ? (actions.Idle_Neutral ? 'Idle_Neutral' : 'Idle') : '', hand } };
 }
@@ -160,7 +160,7 @@ export function makeBird(): { root: Group; wl: Mesh; wr: Mesh } {
   const wl = new Mesh(wing(), MAT); wl.scale.x = -1; const wr = new Mesh(wing(), MAT); root.add(wl, wr);
   return { root, wl, wr };
 }
-export type Pose = 'walk' | 'idle' | 'swim' | 'mow' | 'wave' | 'lie' | 'water';
+export type Pose = 'walk' | 'idle' | 'idle2' | 'swim' | 'mow' | 'wave' | 'lie' | 'water' | 'interact' | 'sit';
 /** Реплики по ролям (по-английски): гости, садовники, администратор. Клипы — public/audio/<role>_<f|m>_<i>.mp3. */
 export const GREETINGS = [
   'Hello there! So glad to see you in this little corner of paradise. Enjoy your stay at Lake Land!',
@@ -211,7 +211,8 @@ export function animate(h: Human, pose: Pose, t: number, speed = 1.2) {
     const sk = h.skin;
     if (pose === 'walk' || pose === 'mow') play(sk, 'Walk', Math.max(0.6, speed / 1.15));
     else if (pose === 'wave') play(sk, 'Wave');
-    else if (pose === 'water') play(sk, 'Interact', 0.8);
+    else if (pose === 'water' || pose === 'interact') play(sk, 'Interact', 0.8);
+    else if (pose === 'idle2' || pose === 'sit') play(sk, 'Idle');
     else play(sk, sk.actions.Idle_Neutral ? 'Idle_Neutral' : 'Idle');
     h.root.rotation.x = 0; return;
   }
@@ -264,7 +265,35 @@ type HouseLite = { fp: [number, number, number, number]; matrix: Matrix4 };
 type Walker = { h: Human; edge: number; from: number; t: number; speed: number; yaw: number; pause: number; greet: number; cool: number; leader?: number; side: number };
 type Sunbather = { h: Human; lounger: Mesh; x: number; y: number; z: number; yaw: number };
 type Waterer = { h: Human; can: Mesh; spots: Vector3[]; i: number; x: number; z: number; yaw: number; watering: number; greet: number; cool: number };
-type Idler = { h: Human; x: number; y: number; z: number; yaw: number; cur: number; greet: number; cool: number };
+type Idler = { h: Human; x: number; y: number; z: number; yaw: number; cur: number; greet: number; cool: number; role: GreetRole; anim: 'idle' | 'idle2' | 'interact' | 'sit' };
+/** Стоящий/сидящий персонаж: где, куда смотрит, какой клип, кто по роли (приветствие), какая модель. */
+export type IdlerSpec = { x: number; y: number; z: number; yaw: number; char?: CharId; role?: GreetRole; anim?: Idler['anim'] };
+export type TerraceSpotW = { x: number; y: number; z: number; yaw: number; kind: 'rail' | 'sit'; house: string };
+// поза «сидит»: клип Idle, после шага микшера бёдра направлены вперёд (чуть вниз), голени вертикально вниз, стопы
+// (отдельные кости под Root в риге Quaternius) переставлены к концу голени; корень опущен так, чтобы тазобедренный
+// сустав оказался на 0,66 м над сиденьем (стоя он на 0,932·масштаб)
+const SIT = { hip: 0.932, seat: 0.66, shin: 0.5, tilt: 0.15 };
+(window as unknown as { __sit: unknown }).__sit = SIT;
+const qTmp = new Quaternion(), qPar = new Quaternion(), vA = new Vector3(), vB = new Vector3(), vC = new Vector3();
+/** Поворот кости в мировых осях: world' = q · world. */
+function rotateBoneWorld(bone: Object3D, q: Quaternion) {
+  bone.parent!.getWorldQuaternion(qPar); const loc = qPar.clone().invert().multiply(q).multiply(qPar); bone.quaternion.premultiply(loc);
+}
+/** Направление кости (локальная +Y) в мире. */
+function boneDir(bone: Object3D, out: Vector3) { bone.getWorldPosition(vA); bone.localToWorld(out.set(0, 1, 0)); return out.sub(vA).normalize(); }
+function aimBone(bone: Object3D, target: Vector3) { boneDir(bone, vB); qTmp.setFromUnitVectors(vB, target); rotateBoneWorld(bone, qTmp); bone.updateMatrixWorld(true); }
+function applySit(h: Human) {
+  const m = h.root.children[0]; if (!m) return;
+  m.updateMatrixWorld(true);
+  const fwd = vC.set(Math.sin(h.root.rotation.y), 0, Math.cos(h.root.rotation.y));
+  const thighT = fwd.clone().setY(-SIT.tilt).normalize(), shinT = fwd.clone().multiplyScalar(0.08).setY(-1).normalize();
+  for (const side of ['L', 'R']) {
+    const up = m.getObjectByName('UpperLeg' + side), lo = m.getObjectByName('LowerLeg' + side), foot = m.getObjectByName('Foot' + side);
+    if (!up || !lo) continue;
+    aimBone(up, thighT); aimBone(lo, shinT);
+    if (foot && foot.parent) { lo.getWorldPosition(vA); vA.addScaledVector(shinT, SIT.shin); foot.parent.worldToLocal(vA); foot.position.copy(vA); }
+  }
+}
 type Bird = { root: Group; wl: Mesh; wr: Mesh; r: number; w: number; ph: number; y: number; cx: number; cz: number };
 type Swimmer = { h: Human; box: Box3; along: 'x' | 'z'; dir: number; pos: number; speed: number; y: number };
 type Gardener = { h: Human; mower: Mesh; rect: [number, number, number, number]; x: number; z: number; dir: number; row: number; speed: number; turning: number; yaw: number; greet: number; cool: number };
@@ -299,9 +328,9 @@ export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number
   return best?.rect ?? null;
 }
 
-export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shrubs = [], lagoon = [120, 0], idlers = [] }: {
+export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shrubs = [], lagoon = [120, 0], idlers = [], terraceSpots = [] }: {
   net: PathNet; heightAt: (x: number, z: number) => number | null; houses: HouseLite[]; pools: Box3[]; inSite: (x: number, z: number) => boolean; audioBase?: string;
-  shrubs?: { x: number; y: number; z: number }[]; lagoon?: [number, number]; idlers?: { x: number; y: number; z: number; yaw: number }[];
+  shrubs?: { x: number; y: number; z: number }[]; lagoon?: [number, number]; idlers?: IdlerSpec[]; terraceSpots?: TerraceSpotW[];
 }) {
   const root = useRef<Group>(null);
   const chars = useGLTF(CHAR_IDS.map((id) => `${audioBase}models/chars/${id}.glb`)) as unknown as CharGltf[];
@@ -376,10 +405,28 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     for (let i = 0; i < 9; i++) { const b = makeBird(); birds.push({ ...b, r: 22 + r() * 30, w: (0.09 + r() * 0.05) * (i % 3 ? 1 : -1), ph: r() * Math.PI * 2, y: 28 + r() * 18, cx: lagoon[0] + (r() - 0.5) * 60, cz: lagoon[1] + (r() - 0.5) * 60 }); }
     (window as unknown as { __npcDbg: unknown }).__npcDbg = { distToHouses: (x: number, z: number) => distToHouses(houses, x, z), distToPaths: (x: number, z: number) => distToPaths(net, x, z) };
     // стоящие персонажи (администратор за стойкой): стоят, здороваются, возвращаются к своему направлению
-    const standing: Idler[] = idlers.map((p, i) => ({ h: makeSkinnedHuman(charOf('f_formal'), true, 900 + i), x: p.x, y: p.y, z: p.z, yaw: p.yaw, cur: p.yaw, greet: 0, cool: 0 }));
+    const standing: Idler[] = idlers.map((p, i) => { const id = p.char ?? 'f_formal'; return { h: makeSkinnedHuman(charOf(id), id.startsWith('f_'), 900 + i), x: p.x, y: p.y, z: p.z, yaw: p.yaw, cur: p.yaw, greet: 0, cool: 0, role: p.role ?? 'reception', anim: p.anim ?? 'idle' }; });
+    // гости на террасах вилл: в каждом доме не больше двух мест (диван + кромка), всего до 12; у кромки иногда пара беседует
+    {
+      const rt = rng(23); const byHouse = new Map<string, TerraceSpotW[]>();
+      for (const sp of terraceSpots) (byHouse.get(sp.house) ?? byHouse.set(sp.house, []).get(sp.house)!).push(sp);
+      const chosen: TerraceSpotW[] = [];
+      for (const [, list] of byHouse) {
+        const sit = list.filter((p) => p.kind === 'sit'), rail = list.filter((p) => p.kind === 'rail');
+        if (sit.length && rt() < 0.8) chosen.push(sit[Math.floor(rt() * sit.length)]);
+        if (rail.length && rt() < 0.85) chosen.push(rail[Math.floor(rt() * rail.length)]);
+      }
+      let gi = 0;
+      for (const sp of chosen.slice(0, 12)) {
+        const mk = (x: number, z: number, yaw: number, anim: Idler['anim']) => { const id = GUEST_IDS[(gi * 5 + 2) % GUEST_IDS.length]; gi++; standing.push({ h: makeSkinnedHuman(charOf(id), id.startsWith('f_'), 950 + gi), x, y: sp.y, z, yaw, cur: yaw, greet: 0, cool: 0, role: 'guest', anim }); };
+        if (sp.kind === 'sit') mk(sp.x, sp.z, sp.yaw, 'sit');
+        else if (rt() < 0.45) { const px = Math.cos(sp.yaw), pz = -Math.sin(sp.yaw); mk(sp.x - px * 0.42, sp.z - pz * 0.42, sp.yaw + 0.75, 'idle'); mk(sp.x + px * 0.42, sp.z + pz * 0.42, sp.yaw - 0.75, 'idle2'); } // пара беседует, глядя на вид
+        else mk(sp.x, sp.z, sp.yaw, rt() < 0.5 ? 'idle' : 'idle2');
+      }
+    }
     return { graph, walkers, swimmers, gardener, sunbathers, waterer, birds, standing };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [net, heightAt, houses, pools, inSite, shrubs, lagoon, idlers, chars]);
+  }, [net, heightAt, houses, pools, inSite, shrubs, lagoon, idlers, terraceSpots, chars]);
 
   useEffect(() => {
     const g = root.current; if (!g) return;
@@ -403,7 +450,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
   const GREET_T = 6.5;
   const tryGreet = (h: Human, cool: number, d: number, role: GreetRole = 'guest'): string | null => {
     const pos = h.root.position; const P = playerState.pos; if (!P || cool > 0 || greetingActive.current) return null;
-    if (Math.hypot(P.x - pos.x, P.z - pos.z) > 3.2 || playerTrack.current.still < 0.5) return null;
+    if (Math.hypot(P.x - pos.x, P.z - pos.z) > 3.2 || Math.abs(P.y - pos.y) > 2.2 || playerTrack.current.still < 0.5) return null;
     const set = ROLE_SETS[role]; const i = Math.floor(Math.random() * set.lines.length); const text = set.lines[i];
     greetingActive.current = true; setBubble({ pos: [pos.x, pos.y + 2.05, pos.z], text }); speak(text, h.female, i, audioBase, set.prefix);
     setTimeout(() => { greetingActive.current = false; setBubble(null); }, GREET_T * 1000 - 200);
@@ -495,10 +542,12 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     }
     for (const st of state.standing) {
       st.cool = Math.max(0, st.cool - d);
-      if (st.greet <= 0 && tryGreet(st.h, st.cool, d, 'reception')) st.greet = GREET_T;
-      if (st.greet > 0) { st.greet -= d; if (st.greet <= 0) st.cool = 40; animate(st.h, 'wave', t); st.cur = faceTo(st.h.root.position, st.cur, d); }
-      else { animate(st.h, 'idle', t + st.h.opts.seed!); let dy = st.yaw - st.cur; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); st.cur += dy * Math.min(1, d * 3); }
-      st.h.root.position.set(st.x, st.y, st.z); st.h.root.rotation.y = st.cur;
+      const sitting = st.anim === 'sit';
+      if (st.greet <= 0 && tryGreet(st.h, st.cool, d, st.role)) st.greet = GREET_T;
+      if (st.greet > 0) { st.greet -= d; if (st.greet <= 0) st.cool = 40; animate(st.h, sitting ? 'sit' : 'wave', t); if (!sitting) st.cur = faceTo(st.h.root.position, st.cur, d); }
+      else { animate(st.h, st.anim, t + st.h.opts.seed!); let dy = st.yaw - st.cur; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); st.cur += dy * Math.min(1, d * 3); }
+      const sc = st.h.root.children[0]?.scale.x ?? 1;
+      st.h.root.position.set(st.x, sitting ? st.y + SIT.seat - SIT.hip * sc : st.y, st.z); st.h.root.rotation.y = st.cur;
     }
     for (const b of state.birds) {
       const a = b.ph + t * b.w; const x = b.cx + Math.cos(a) * b.r, z = b.cz + Math.sin(a) * b.r;
@@ -508,6 +557,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     }
     // скелетные персонажи: шаг микшеров
     for (const h of [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h)]) h.skin?.mixer.update(d);
+    for (const st of state.standing) if (st.anim === 'sit') applySit(st.h); // поза «сидит» поверх клипа
     // игрок не проходит сквозь людей: мягкий толчок наружу
     if (P) {
       const all = [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h)];

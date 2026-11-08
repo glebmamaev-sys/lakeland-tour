@@ -109,6 +109,12 @@ class Placer {
     return true;
   }
   placed: { x: number; z: number; yaw: number; w: number; d: number; fail?: boolean; soft?: boolean }[] = [];
+  /** Можно ли здесь стоять человеку: в комнате, не в проёме, не в мебели, под ногами пол. */
+  canStand(x: number, z: number) {
+    if (!this.ok(x, z, 0.5, 0.5, 0, 0)) return false;
+    for (const it of this.placed) { if (it.fail || it.soft) continue; const ic = Math.abs(Math.cos(it.yaw)), is = Math.abs(Math.sin(it.yaw)); const ihw = (it.w * ic + it.d * is) / 2, ihd = (it.w * is + it.d * ic) / 2; if (Math.abs(it.x - x) < 0.25 + ihw && Math.abs(it.z - z) < 0.25 + ihd) return false; }
+    return !this.support || this.support(x, this.room.y, z);
+  }
   /** soft — ковёр: может лежать под другими предметами. Предметы не пересекаются и стоят только там, где под ними есть пол. */
   put(g: BufferGeometry, x: number, z: number, yaw: number, w: number, d: number, list: BufferGeometry[] = this.matte, margin = 0.15, soft = false) {
     const c = Math.abs(Math.cos(yaw)), s = Math.abs(Math.sin(yaw)); const hw = (w * c + d * s) / 2, hd = (w * s + d * c) / 2;
@@ -229,16 +235,31 @@ function furnishBath(p: Placer, r: RoomInfo, seed: number) {
   p.put(F.pottedPlant('kentia', seed), c2.x, c2.z, 0, 0.7, 0.7, p.matte, 0.3);
 }
 
+/** Места для гостей на террасах (координаты виллы): у наружного края (стоять, смотреть на вид) и на диване (сидеть). */
+export type TerraceSpot = { x: number; y: number; z: number; yaw: number; kind: 'rail' | 'sit' };
+let spots: TerraceSpot[] = []; let bboxC: [number, number] = [0, 0];
 function furnishTerrace(p: Placer, r: RoomInfo, seed: number) {
   const W = r.rect.x1 - r.rect.x0, D = r.rect.z1 - r.rect.z0;
   if ((r.area ?? W * D) >= 18 && W >= 3 && D >= 3) {
     const alongX = W >= D; const yaw = alongX ? 0 : Math.PI / 2; const n = alongX ? new Vector3(0, 0, 1) : new Vector3(1, 0, 0);
-    p.put(F.sofa(2.2, 3), r.cx - n.x * 1.1, r.cz - n.z * 1.1, yaw, 2.2, 0.95) && p.put(F.coffeeTable(1.0, 0.6), r.cx + n.x * 0.3, r.cz + n.z * 0.3, yaw, 1.0, 0.6);
+    const sx = r.cx - n.x * 1.1, sz = r.cz - n.z * 1.1;
+    if (p.put(F.sofa(2.2, 3), sx, sz, yaw, 2.2, 0.95)) {
+      p.put(F.coffeeTable(1.0, 0.6), r.cx + n.x * 0.3, r.cz + n.z * 0.3, yaw, 1.0, 0.6);
+      spots.push({ x: sx + n.x * 0.2, y: r.y, z: sz + n.z * 0.2, yaw: Math.atan2(n.x, n.z), kind: 'sit' }); // сидит на диване лицом к столику
+    }
     p.put(F.rug(3.0, 2.6, F.C.jute), r.cx, r.cz, yaw, 3.0, 2.6, p.matte, 0.3, true);
   }
   if (W < 1.8 || D < 1.8) return; // узкий балкон/проход — без кадок (кадка на парапете или у лестницы)
   const corners = [[r.rect.x0 + 0.75, r.rect.z0 + 0.75], [r.rect.x1 - 0.75, r.rect.z1 - 0.75]];
   corners.forEach(([x, z], i) => p.put(F.planter(seed + i), x, z, 0, 0.9, 0.9, p.matte, 0.0));
+  // место у наружного края террасы (сторона, дальняя от центра дома): стоит в 0,7 м от кромки, смотрит наружу
+  if ((r.area ?? W * D) >= 6) {
+    const sides: { d: number; x: number; z: number; yaw: number }[] = [
+      { d: Math.abs(r.rect.x1 - bboxC[0]), x: r.rect.x1 - 0.7, z: r.cz, yaw: Math.PI / 2 }, { d: Math.abs(r.rect.x0 - bboxC[0]), x: r.rect.x0 + 0.7, z: r.cz, yaw: -Math.PI / 2 },
+      { d: Math.abs(r.rect.z1 - bboxC[1]), x: r.cx, z: r.rect.z1 - 0.7, yaw: 0 }, { d: Math.abs(r.rect.z0 - bboxC[1]), x: r.cx, z: r.rect.z0 + 0.7, yaw: Math.PI },
+    ].sort((a, b) => b.d - a.d);
+    for (const sd of sides.slice(0, 2)) { const off = ((seed % 3) - 1) * 0.6; const x = sd.yaw === 0 || sd.yaw === Math.PI ? sd.x + off : sd.x, z = sd.yaw === 0 || sd.yaw === Math.PI ? sd.z : sd.z + off; if (p.canStand(x, z)) { spots.push({ x, y: r.y, z, yaw: sd.yaw, kind: 'rail' }); break; } }
+  }
 }
 
 /** Собирает мебель всей виллы: Group из трёх мешей (матовая мебель, абажуры, холсты). */
@@ -251,7 +272,7 @@ export function waterBoxes(root: Object3D): Box3[] {
 export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], artTexture: Texture, detail?: DetailMaps, water: Box3[] = [], support: ((x: number, y: number, z: number) => boolean) | null = null): Group {
   const matte: BufferGeometry[] = [], shade: BufferGeometry[] = [], art: BufferGeometry[] = [];
   const dbg: unknown[] = []; (window as unknown as { __rooms: unknown }).__rooms = dbg;
-  let seed = 1;
+  let seed = 1; spots = []; bboxC = [(plan.bbox[0] + plan.bbox[2]) / 2, (plan.bbox[1] + plan.bbox[3]) / 2];
   for (const l of plan.levels) {
     const kitchens = l.rooms.filter((r) => kindOf(r.name) === 'kitchen');
     const livings = l.rooms.filter((r) => kindOf(r.name) === 'living');
@@ -312,6 +333,7 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
     art.forEach((c, i) => { const uv = c.getAttribute('uv'); if (uv) for (let k = 0; k < uv.count; k++) uv.setX(k, uv.getX(k) * 0.5 + (i % 2) * 0.5); });
     mk(art, new MeshStandardMaterial({ map: artTexture, roughness: 0.9 }), 'furniture-art');
   }
+  g.userData.spots = spots; // места гостей на террасах — клоны домов наследуют (userData копируется)
   return g;
 }
 

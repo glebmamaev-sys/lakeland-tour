@@ -20,7 +20,8 @@ import { Frangipani, Palms, Shrubs, type Plant } from './world/Vegetation';
 import { Lagoon } from './world/Lagoon';
 import { buildPathNetwork, distToPaths, pathRibbon, type PathNet } from './world/Paths';
 import { makeArtTexture, makeNoiseTexture, makeWeaveTexture, type DetailMaps } from './world/textures';
-import { furnishVilla, glassBoxes, waterBoxes } from './world/Interiors';
+import { furnishVilla, glassBoxes, waterBoxes, type TerraceSpot } from './world/Interiors';
+import type { IdlerSpec } from './world/Characters';
 import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
 import { Grass } from './world/Grass';
@@ -39,6 +40,8 @@ export type HouseInfo = {
   /** контур дома в координатах виллы: minX, minZ, maxX, maxZ */
   fp: [number, number, number, number];
   entry: [number, number, number]; entryYaw: number; matrix: Matrix4;
+  /** места гостей на террасах (мир) */
+  spots: (TerraceSpot & { house: string })[];
 };
 /** Данные комплекса для HUD (карта, телепорт): заполняются сценой, читаются по таймеру. */
 export const complexStore: {
@@ -296,7 +299,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const e = outer.localToWorld(new Vector3(...(cfg.entry?.pos ?? cfg.spawn)));
       // бассейны (меши воды) в мировых координатах — для пловцов
       inner.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.userData.role === 'water' && m.visible) { const bx = new Box3().setFromObject(m); if (bx.max.x - bx.min.x > 1.5 && bx.max.z - bx.min.z > 1.5) pools.push(bx); } });
-      houses.push({ id: b.id, model: b.model, title: `${b.id} · ${cfg.title}`, poly: corners, fp: [fp.min.x, fp.min.z, fp.max.x, fp.max.z], entry: [e.x, e.y, e.z], entryYaw: (cfg.entry?.yaw ?? cfg.spawnYaw) - b.rot, matrix: outer.matrixWorld.clone() });
+      const tspots = ((inner.getObjectByName('furniture')?.userData.spots ?? []) as TerraceSpot[]).map((sp) => { const v = new Vector3(sp.x, sp.y, sp.z).applyMatrix4(outer.matrixWorld); return { x: v.x, y: v.y, z: v.z, yaw: sp.yaw - b.rot, kind: sp.kind, house: b.id }; });
+      houses.push({ id: b.id, model: b.model, title: `${b.id} · ${cfg.title}`, poly: corners, fp: [fp.min.x, fp.min.z, fp.max.x, fp.max.z], entry: [e.x, e.y, e.z], entryYaw: (cfg.entry?.yaw ?? cfg.spawnYaw) - b.rot, matrix: outer.matrixWorld.clone(), spots: tspots });
       return outer;
     });
     setStage('instances:done');
@@ -694,9 +698,12 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     g.position.set(shop.pos[0], y, shop.pos[1]); g.rotation.y = yaw; g.updateMatrixWorld(true);
     const rp = (g.userData.receptionist as Vector3).clone().applyMatrix4(g.matrixWorld);
     g.userData.receptionistWorld = { x: rp.x, y: rp.y, z: rp.z, yaw: yaw }; // смотрит к входу (+z локально)
+    g.userData.customersWorld = (g.userData.customers as { x: number; z: number; yaw: number; anim: string; char: string }[]).map((c) => { const v = new Vector3(c.x, 0, c.z).applyMatrix4(g.matrixWorld); return { x: v.x, y: v.y, z: v.z, yaw: c.yaw + yaw, anim: c.anim, char: c.char, role: 'guest' }; });
     shop.floor = y;
     return g;
   }, [shop, built, tex]);
+  const idlerSpecs = useMemo<IdlerSpec[]>(() => shopObj ? [{ ...(shopObj.userData.receptionistWorld as { x: number; y: number; z: number; yaw: number }), char: 'f_formal', role: 'reception', anim: 'idle' }, ...(shopObj.userData.customersWorld as IdlerSpec[])] : [], [shopObj]);
+  const terraceSpots = useMemo(() => houses.flatMap((hh) => hh.spots), [houses]);
   const grass = tex.grass;
   // газон: плитка травы + крупный шум (убирает повторы) через onBeforeCompile
   const grassVary = (m: MeshStandardMaterial, scale: number) => {
@@ -776,7 +783,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       {data && <Lagoon level={data.c.water_level} />}
       {data && built && <Lotuses items={built.lotus} level={data.c.water_level} />}
       {built && complexStore.heightAt && !lowQ && !new URLSearchParams(location.search).has('nograss') && <Grass heightAt={complexStore.heightAt} ok={built.grassOk} count={Number(new URLSearchParams(location.search).get('grass')) || (input.mobile ? 15_000 : 45_000)} radius={input.mobile ? 18 : 26} />}
-      {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} idlers={shopObj ? [shopObj.userData.receptionistWorld as { x: number; y: number; z: number; yaw: number }] : []} />}
+      {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} idlers={idlerSpecs} terraceSpots={terraceSpots} />}
     </group>
   );
 }

@@ -192,5 +192,11 @@ export function buildShop(W: number, D: number, tex: ShopTextures, groundDrop = 
   const ramp = new Mesh(new BoxGeometry(2.6, 0.02, 2.2), new MeshStandardMaterial({ visible: false }));
   ramp.position.set(0, -groundDrop / 2 - 0.05, hd + 1.9); ramp.rotation.x = Math.atan2(groundDrop + 0.1, 2.2); g.add(ramp);
   g.userData.receptionist = new Vector3(-2.3, 0, -hd + 0.95); // где стоит администратор (локально)
+  // покупатели (локально): у кофемашины (нажимает кнопки), у стеллажа (разглядывает), у прилавка с фруктами
+  g.userData.customers = [
+    { x: hw - T - 1.15, z: hd - 2.2, yaw: Math.PI / 2, anim: 'interact', char: 'f_casual' },
+    { x: hw - T - 1.05, z: -0.9, yaw: Math.PI / 2, anim: 'idle', char: 'm_hoodie' },
+    { x: 1.95, z: 0.9, yaw: -Math.PI / 2, anim: 'idle2', char: 'f_adventurer' },
+  ];
   return g;
 }
