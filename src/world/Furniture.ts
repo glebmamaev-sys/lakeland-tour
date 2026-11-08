@@ -149,6 +149,15 @@ export function chair(): BufferGeometry {
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(box(0.035, 0.44, 0.035, C.walnut, sx * 0.2, 0, sz * 0.2));
   return merge(p);
 }
+/** Ограждение: стальные стойки через ≤1,3 м, поручень из ореха на 1,0 м, стеклянный экран (отдельная геометрия). Вдоль +x, центр в 0. */
+export function railing(len = 2.0): { frame: BufferGeometry; glass: BufferGeometry } {
+  const p: BufferGeometry[] = []; const n = Math.max(1, Math.round(len / 1.3)); const seg = len / n;
+  for (let i = 0; i <= n; i++) p.push(box(0.04, 1.02, 0.04, '#b9bcbf', -len / 2 + seg * i, 0, 0, 0.01));
+  p.push(box(len + 0.04, 0.05, 0.07, C.walnut, 0, 1.0, 0, 0.03)); // поручень
+  p.push(box(len, 0.02, 0.03, '#b9bcbf', 0, 0.1, 0, 0.01));          // нижняя обвязка
+  const glass = new BoxGeometry(len - 0.08, 0.86, 0.012); glass.translate(0, 0.12 + 0.43, 0);
+  return { frame: merge(p), glass };
+}
 /** Кухонный гарнитур вдоль стены: нижние шкафы (тик) с цоколем и фасадами, столешница из камня, мойка с краном,
  *  варочная панель. Длина len, глубина 0,6, лицом на +z (стена за спиной, −z). */
 export function kitchenBase(len = 3.0): BufferGeometry {

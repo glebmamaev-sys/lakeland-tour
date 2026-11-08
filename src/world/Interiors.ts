@@ -10,7 +10,7 @@ import { applyDetailMaps, type DetailMaps } from './textures';
 
 type Rect = { x0: number; z0: number; x1: number; z1: number };
 type Side = 'px' | 'nx' | 'pz' | 'nz';
-type RoomInfo = { name: string; kind: Kind; y: number; rect: Rect; cx: number; cz: number; glass: Record<Side, number>; area: number | null };
+type RoomInfo = { name: string; kind: Kind; y: number; rect: Rect; cx: number; cz: number; glass: Record<Side, number>; area: number | null; leaked?: boolean }; // leaked: контур заливкой «утёк», взята коробка вокруг метки
 type Kind = 'bedroom' | 'living' | 'dining' | 'bath' | 'terrace' | 'kitchen' | 'skip';
 
 const SIDES: Side[] = ['px', 'nx', 'pz', 'nz'];
@@ -93,9 +93,22 @@ const yawTo = (d: Vector3) => Math.atan2(d.x, d.z);
 
 /** Набор предметов с проверкой: внутри комнаты (с запасом) и не в проёме двери. */
 class Placer {
-  matte: BufferGeometry[] = []; shade: BufferGeometry[] = []; art: BufferGeometry[] = [];
-  private room: RoomInfo; private passages: Passage[]; private blocked: Rect[]; private support: ((x: number, y: number, z: number) => boolean) | null; private obstacle: ((x: number, y: number, z: number) => boolean) | null;
-  constructor(room: RoomInfo, passages: Passage[], blocked: Rect[] = [], support: ((x: number, y: number, z: number) => boolean) | null = null, obstacle: ((x: number, y: number, z: number) => boolean) | null = null) { this.room = room; this.passages = passages; this.blocked = blocked; this.support = support; this.obstacle = obstacle; }
+  matte: BufferGeometry[] = []; shade: BufferGeometry[] = []; art: BufferGeometry[] = []; glassParts: BufferGeometry[] = [];
+  private room: RoomInfo; private passages: Passage[]; private blocked: Rect[]; private support: ((x: number, y: number, z: number) => boolean) | null; private obsH: ((x: number, y: number, z: number) => number | null) | null;
+  constructor(room: RoomInfo, passages: Passage[], blocked: Rect[] = [], support: ((x: number, y: number, z: number) => boolean) | null = null, obsH: ((x: number, y: number, z: number) => number | null) | null = null) { this.room = room; this.passages = passages; this.blocked = blocked; this.support = support; this.obsH = obsH; }
+  wallProbe: ((x: number, y: number, z: number, nx: number, nz: number) => boolean) | null = null;
+  /** Есть ли стена у стороны комнаты в точке (x,z) (n — нормаль внутрь комнаты): луч в сторону стены. Без пробы — считаем, что есть. */
+  wallAt(x: number, z: number, n: Vector3) { return this.wallProbe ? this.wallProbe(x, this.room.y, z, -n.x, -n.z) : true; }
+  /** Препятствие выше 45 см над полом (низкие платформы и ковры модели не мешают). */
+  private obstacle(x: number, y: number, z: number) { const h = this.obsH ? this.obsH(x, y, z) : null; return h !== null && h > y + 0.45; }
+  /** Габарит низких предметов модели в комнате (верх 15–60 см над полом): платформы кроватей Revit. */
+  lowBox(hmin = 0.15, hmax = 0.6): Rect | null {
+    if (!this.obsH) return null; const r = this.room.rect, y = this.room.y; let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity, n = 0;
+    for (let x = r.x0 + 0.15; x <= r.x1 - 0.15; x += 0.25) for (let z = r.z0 + 0.15; z <= r.z1 - 0.15; z += 0.25) { const h = this.obsH(x, y, z); if (h === null || h < y + hmin || h > y + hmax) continue; n++; x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    return n >= 12 ? { x0: x0 - 0.12, z0: z0 - 0.12, x1: x1 + 0.12, z1: z1 + 0.12 } : null;
+  }
+  /** Поставить без проверки препятствий модели (на платформу Revit). */
+  putForce(g: BufferGeometry, x: number, z: number, yaw: number, w: number, d: number) { const o = this.obsH; this.obsH = null; const ok = this.put(g, x, z, yaw, w, d); this.obsH = o; return ok; }
   private ok(x: number, z: number, w: number, d: number, yaw: number, margin = 0.15) {
     const c = Math.abs(Math.cos(yaw)), s = Math.abs(Math.sin(yaw)); const hw = (w * c + d * s) / 2, hd = (w * s + d * c) / 2;
     const r = this.room.rect; if (x - hw < r.x0 - margin || x + hw > r.x1 + margin || z - hd < r.z0 - margin || z + hd > r.z1 + margin) return false;
@@ -136,6 +149,14 @@ class Placer {
     list.push(F.place(g, x, this.room.y, z, yaw)); this.placed.push({ x, z, yaw, w, d, soft }); return true;
   }
   putAt(g: BufferGeometry, x: number, y: number, z: number, yaw: number, list: BufferGeometry[] = this.matte) { list.push(F.place(g, x, y, z, yaw)); }
+  /** Перила по отрезку (x1,z1)-(x2,z2): ставятся, если под обоими концами (с отступом 0,15 м) и серединой есть пол. */
+  putRail(r: { frame: BufferGeometry; glass: BufferGeometry }, x1: number, z1: number, x2: number, z2: number, yaw: number) {
+    const y = this.room.y; const L = Math.hypot(x2 - x1, z2 - z1) || 1; const ux = (x2 - x1) / L, uz = (z2 - z1) / L;
+    const pts: [number, number][] = [[x1 + ux * 0.15, z1 + uz * 0.15], [x2 - ux * 0.15, z2 - uz * 0.15], [(x1 + x2) / 2, (z1 + z2) / 2]];
+    if (this.support && !pts.every(([px, pz]) => this.support!(px, y, pz))) return false;
+    const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2;
+    this.matte.push(F.place(r.frame, mx, y, mz, yaw)); this.glassParts.push(F.place(r.glass, mx, y, mz, yaw)); return true;
+  }
   /** Кадка с растением — только в свободный угол комнаты: не ближе 1,2 м к проёмам и 1 м к лестницам/служебным зонам, сначала глухие углы. */
   putPlant(g: BufferGeometry, size = 0.8): boolean {
     const r = this.room.rect, y = this.room.y, ins = size / 2 + 0.12;
@@ -168,8 +189,21 @@ const depth = (rect: Rect, side: Side) => (side === 'px' || side === 'nx' ? rect
 function furnishBedroom(p: Placer, r: RoomInfo, seed: number) {
   const order = SIDES.slice().sort((a, b) => r.glass[a] - r.glass[b] || sideLen(r.rect, b) - sideLen(r.rect, a));
   let solid: Side = order[0], bedW = 1.5, yaw = 0, w = nearWall(r.rect, solid, 1.15), placed = false;
+  // в модели уже есть низкая платформа кровати — ставим нашу кровать на неё (по её контуру), изголовьем к ближней стене
+  const lb = p.lowBox();
+  if (lb) {
+    const lw = lb.x1 - lb.x0, ld = lb.z1 - lb.z0; const L = Math.max(lw, ld), S = Math.min(lw, ld);
+    if (L >= 1.8 && L <= 2.8 && S >= 1.3 && S <= 2.4) {
+      const cx = (lb.x0 + lb.x1) / 2, cz = (lb.z0 + lb.z1) / 2; bedW = S >= 1.9 ? 1.8 : 1.5;
+      if (ld >= lw) { solid = cz - r.rect.z0 < r.rect.z1 - cz ? 'nz' : 'pz'; } else { solid = cx - r.rect.x0 < r.rect.x1 - cx ? 'nx' : 'px'; }
+      yaw = yawTo(inward(solid)); const n0 = inward(solid); w = { x: cx + n0.x * 0, z: cz, n: n0 };
+      if (p.putForce(F.bed(bedW, Math.min(2.1, L - 0.1)), cx, cz, yaw, bedW + 0.1, Math.min(2.2, L))) placed = true;
+    }
+  }
+  if (!placed)
   for (const side of order) {
     if (r.glass[side] > 0.6 || sideLen(r.rect, side) < 2.4 || depth(r.rect, side) < 2.7) continue;
+    { const wp = nearWall(r.rect, side, 0.3); if (!p.wallAt(wp.x, wp.z, wp.n)) continue; } // за изголовьем должна быть стена
     solid = side; bedW = sideLen(r.rect, side) > 3.6 ? 1.8 : 1.5; yaw = yawTo(inward(side)); const bedG = F.bed(bedW, 2.1);
     for (const along of [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8]) { w = nearWall(r.rect, side, 1.15, along); if (p.put(bedG, w.x, w.z, yaw, bedW + 0.1, 2.2)) { placed = true; break; } }
     if (placed) break;
@@ -183,7 +217,8 @@ function furnishBedroom(p: Placer, r: RoomInfo, seed: number) {
   }
   p.put(F.rug(bedW + 1.6, 2.2), w.x + w.n.x * 0.9, w.z + w.n.z * 0.9, yaw, bedW + 1.6, 2.2, p.matte, 0.3, true);
   // диптих над кроватью (на глухой стене)
-  if (r.glass[solid] < 0.3) for (const s of [-1, 1]) { const a = F.artFrame(0.6, 0.8); const ax = w.x - w.n.x * 1.1 + t.x * s * 0.42, az = w.z - w.n.z * 1.1 + t.z * s * 0.42; p.putAt(a.frame, ax, r.y + 1.45, az, yaw); p.putAt(a.canvas, ax, r.y + 1.45, az, yaw, p.art); }
+  const wallPt = nearWall(r.rect, solid, 0.3);
+  if (r.glass[solid] < 0.3 && !r.leaked && p.wallAt(wallPt.x, wallPt.z, wallPt.n)) for (const s of [-1, 1]) { const a = F.artFrame(0.6, 0.8); const ax = w.x - w.n.x * 1.1 + t.x * s * 0.42, az = w.z - w.n.z * 1.1 + t.z * s * 0.42; p.putAt(a.frame, ax, r.y + 1.45, az, yaw); p.putAt(a.canvas, ax, r.y + 1.45, az, yaw, p.art); }
   // кресло и растение по углам у стены напротив стекла
   const corner = (sideA: Side, sideB: Side) => ({ x: sideA === 'px' || sideB === 'px' ? r.rect.x1 - 0.6 : r.rect.x0 + 0.6, z: sideA === 'pz' || sideB === 'pz' ? r.rect.z1 - 0.6 : r.rect.z0 + 0.6 });
   const view = SIDES.slice().sort((a, b) => r.glass[b] - r.glass[a])[0];
@@ -229,8 +264,8 @@ function furnishLiving(p: Placer, r: RoomInfo, seed: number) {
   if (p.put(F.sideTable(), lx, lz, 0, 0.5, 0.5)) { p.putAt(lamp.body, lx, r.y + 0.55, lz, 0); p.putAt(lamp.shade, lx, r.y + 0.55, lz, 0, p.shade); }
   p.putAt(F.rattanPendant(0.45, 0.5, -0.6), tx, r.y + 2.9, tz, 0); // подвес над столом
   if (r.glass[back] < 0.3) { // картина на глухой стене за диваном
-    const a = F.artFrame(1.1, 1.3); const wb = nearWall(r.rect, back, 0.04);
-    p.putAt(a.frame, wb.x, r.y + 0.9, wb.z, face); p.putAt(a.canvas, wb.x, r.y + 0.9, wb.z, face, p.art);
+    const a = F.artFrame(1.1, 1.3); const wb = nearWall(r.rect, back, 0.04); const wq = nearWall(r.rect, back, 0.3);
+    if (!r.leaked && p.wallAt(wq.x, wq.z, wq.n)) { p.putAt(a.frame, wb.x, r.y + 0.9, wb.z, face); p.putAt(a.canvas, wb.x, r.y + 0.9, wb.z, face, p.art); }
   }
   const vx = w.x - t.x * (sofaLen / 2 + 0.6), vz = w.z - t.z * (sofaLen / 2 + 0.6); p.put(F.floorVase(), vx, vz, 0, 0.5, 0.5);
   p.putPlant(F.pottedPlant('strelitzia', seed), 0.9);
@@ -251,6 +286,7 @@ function furnishKitchen(p: Placer, r: RoomInfo) {
   const order = SIDES.slice().sort((a, b) => r.glass[a] - r.glass[b] || sideLen(r.rect, b) - sideLen(r.rect, a));
   for (const side of order) {
     const L = sideLen(r.rect, side); if (r.glass[side] > 0.5 || L < 2.4) continue;
+    { const wp = nearWall(r.rect, side, 0.3); if (!p.wallAt(wp.x, wp.z, wp.n)) continue; } // гарнитур только у реальной стены
     const n = inward(side); const yaw = yawTo(n); const t = new Vector3(-n.z, 0, n.x); // вдоль стены
     const withFridge = L >= 3.4; const runLen = Math.min(L - 0.2 - (withFridge ? 0.76 : 0), 5.4);
     const shift = withFridge ? -0.38 : 0; // гарнитур смещён от торца с холодильником
@@ -290,9 +326,9 @@ function furnishTerrace(p: Placer, r: RoomInfo, seed: number) {
     }
     p.put(F.rug(3.0, 2.6, F.C.jute), r.cx, r.cz, yaw, 3.0, 2.6, p.matte, 0.3, true);
   }
-  if (W < 1.8 || D < 1.8) return; // узкий балкон/проход — без кадок (кадка на парапете или у лестницы)
-  const corners = [[r.rect.x0 + 0.75, r.rect.z0 + 0.75], [r.rect.x1 - 0.75, r.rect.z1 - 0.75]];
-  corners.forEach(([x, z], i) => p.put(F.planter(seed + i), x, z, 0, 0.9, 0.9, p.matte, 0.0));
+  if (W < 2.6 || D < 2.6 || r.leaked) return; // узкий балкон/проход или контур «утёк» (углы коробки — посреди террасы) — без кадок
+  // кадки — только в свободные углы террасы (не у проёмов и лестниц), как растения в комнатах
+  p.putPlant(F.planter(seed), 0.9); p.putPlant(F.planter(seed + 1), 0.9);
   // место у наружного края террасы (сторона, дальняя от центра дома): стоит в 0,7 м от кромки, смотрит наружу
   if ((r.area ?? W * D) >= 6) {
     const sides: { d: number; x: number; z: number; yaw: number }[] = [
@@ -321,8 +357,8 @@ export function waterBoxes(root: Object3D): Box3[] {
   root.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.userData.role === 'water') out.push(new Box3().setFromObject(m)); });
   return out;
 }
-export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], artTexture: Texture, detail?: DetailMaps, water: Box3[] = [], support: ((x: number, y: number, z: number) => boolean) | null = null, obstacle: ((x: number, y: number, z: number) => boolean) | null = null): Group {
-  const matte: BufferGeometry[] = [], shade: BufferGeometry[] = [], art: BufferGeometry[] = [];
+export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], artTexture: Texture, detail?: DetailMaps, water: Box3[] = [], support: ((x: number, y: number, z: number) => boolean) | null = null, obstacle: ((x: number, y: number, z: number) => number | null) | null = null, wallProbe: ((x: number, y: number, z: number, nx: number, nz: number) => boolean) | null = null): Group {
+  const matte: BufferGeometry[] = [], shade: BufferGeometry[] = [], art: BufferGeometry[] = [], glassParts: BufferGeometry[] = [];
   const dbg: unknown[] = []; (window as unknown as { __rooms: unknown }).__rooms = dbg;
   let seed = 1; spots = []; bboxC = [(plan.bbox[0] + plan.bbox[2]) / 2, (plan.bbox[1] + plan.bbox[3]) / 2];
   for (const l of plan.levels) {
@@ -340,12 +376,13 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
       if (kind === 'skip') return null;
       let rect = roomRect(l, plan.bbox, room.x, room.z, room.area, glass, passages, kind === 'terrace');
       // заливка «утекла» (bbox сильно больше площади помещения) — ограничиваем коробкой вокруг метки
+      let leaked = false;
       if (room.area && (rect.x1 - rect.x0) * (rect.z1 - rect.z0) > 3.5 * room.area && kind !== 'terrace') {
-        if (kind === 'bedroom') return null; // метка спальни внутри большего помещения (гардероб, зона в спальне) — вторая кровать в той же комнате не нужна
+        if (kind === 'bedroom') return null; leaked = true; // метка спальни внутри большего помещения (гардероб, зона в спальне) — вторая кровать в той же комнате не нужна
         const h = Math.sqrt(room.area) * 0.9;
         rect = { x0: Math.max(rect.x0, room.x - h), z0: Math.max(rect.z0, room.z - h), x1: Math.min(rect.x1, room.x + h), z1: Math.min(rect.z1, room.z + h) };
       }
-      return { room, kind, rect, a: (rect.x1 - rect.x0) * (rect.z1 - rect.z0) };
+      return { room, kind, rect, leaked, a: (rect.x1 - rect.x0) * (rect.z1 - rect.z0) };
     }).filter((it): it is NonNullable<typeof it> => !!it);
     const overlap = (a: Rect, b: Rect) => Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.z1, b.z1) - Math.max(a.z0, b.z0));
     // открытый план: гостиная и столовая (или две зоны) делят одно пространство — режем по серединному перпендикуляру между их метками
@@ -362,12 +399,12 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
     for (const [x1, z1, x2, z2] of l.stairs) claimed.push({ x0: Math.min(x1, x2) - 0.6, z0: Math.min(z1, z2) - 0.6, x1: Math.max(x1, x2) + 0.6, z1: Math.max(z1, z2) + 0.6 }); // лестницы плана: мебель и кадки не на проходе
     for (const b of water) if (b.max.y > l.level - 1 && b.min.y < l.level + 1) claimed.push({ x0: b.min.x - 0.3, z0: b.min.z - 0.3, x1: b.max.x + 0.3, z1: b.max.z + 0.3 }); // вода этого уровня
     if (import.meta.env.DEV) (window as unknown as { __service: unknown[] }).__service = [...((window as unknown as { __service?: unknown[] }).__service ?? []), { level: l.level, service, rooms: l.rooms.map((r) => [r.name, r.area, +r.x.toFixed(1), +r.z.toFixed(1)]) }];
-    for (const { room, kind, rect, a } of items) {
+    for (const { room, kind, rect, a, leaked } of items) {
       if (a < 0.5 || claimed.slice(service.length + water.length).some((c) => overlap(rect, c) > 0.7 * a)) continue;
       const walls = rect;
-      const info: RoomInfo = { name: room.name, kind, y: l.level, rect, cx: (rect.x0 + rect.x1) / 2, cz: (rect.z0 + rect.z1) / 2, area: room.area,
+      const info: RoomInfo = { name: room.name, kind, y: l.level, rect, cx: (rect.x0 + rect.x1) / 2, cz: (rect.z0 + rect.z1) / 2, area: room.area, leaked,
         glass: { px: glassOnSide(rect, l.level, 'px', glass), nx: glassOnSide(rect, l.level, 'nx', glass), pz: glassOnSide(rect, l.level, 'pz', glass), nz: glassOnSide(rect, l.level, 'nz', glass) } };
-      const p = new Placer(info, passages, claimed.slice(), support, obstacle); seed += 3; claimed.push(rect);
+      const p = new Placer(info, passages, claimed.slice(), support, obstacle); p.wallProbe = wallProbe; seed += 3; claimed.push(rect);
       dbg.push({ name: room.name, kind, level: l.level, rect: [rect.x0, rect.z0, rect.x1, rect.z1].map((v) => +v.toFixed(1)), walls: [walls.x0, walls.z0, walls.x1, walls.z1].map((v) => +v.toFixed(1)), glass: info.glass, items: p.placed, note: '' });
       if (kind === 'bedroom') furnishBedroom(p, info, seed);
       else if (kind === 'living') furnishLiving(p, info, seed);
@@ -376,13 +413,26 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
       else if (kind === 'terrace') furnishTerrace(p, info, seed);
       else if (kind === 'kitchen') furnishKitchen(p, info);
       (dbg[dbg.length - 1] as { placed: number; note: string }).placed = p.placed.filter((it) => !it.fail).length; (dbg[dbg.length - 1] as { note: string }).note = (p as unknown as { note?: string }).note ?? '';
-      matte.push(...p.matte); shade.push(...p.shade); art.push(...p.art);
+      matte.push(...p.matte); shade.push(...p.shade); art.push(...p.art); glassParts.push(...p.glassParts);
     }
+    // перила по линиям ограждений плана (террасы, балконы, площадки): стойки, деревянный поручень, стекло;
+    // не на лестничных маршах (у них свой уклон) и только там, где под обоими концами есть пол
+    const lvlInfo: RoomInfo = { name: 'level', kind: 'skip', y: l.level, rect: { x0: plan.bbox[0] - 1, z0: plan.bbox[1] - 1, x1: plan.bbox[2] + 1, z1: plan.bbox[3] + 1 }, cx: 0, cz: 0, glass: { px: 0, nx: 0, pz: 0, nz: 0 }, area: null };
+    const lp = new Placer(lvlInfo, passages, [], support, null);
+    for (const [x1, z1, x2, z2] of l.rails) {
+      const L = Math.hypot(x2 - x1, z2 - z1); if (L < 0.6) continue;
+      const mx = (x1 + x2) / 2, mz = (z1 + z2) / 2;
+      if (l.stairs.some(([sx1, sz1, sx2, sz2]) => mx > Math.min(sx1, sx2) - 0.8 && mx < Math.max(sx1, sx2) + 0.8 && mz > Math.min(sz1, sz2) - 0.8 && mz < Math.max(sz1, sz2) + 0.8)) continue;
+      const yaw = Math.atan2(-(z2 - z1), x2 - x1); const r = F.railing(L);
+      lp.putRail(r, x1, z1, x2, z2, yaw);
+    }
+    matte.push(...lp.matte); glassParts.push(...lp.glassParts);
   }
   const g = new Group(); g.name = 'furniture';
   const mk = (parts: BufferGeometry[], mat: MeshStandardMaterial, name: string) => { if (!parts.length) return; const m = new Mesh(F.merge(parts), mat); m.name = name; m.castShadow = true; m.receiveShadow = true; m.userData.role = 'furniture'; g.add(m); };
   { const m = new MeshStandardMaterial({ vertexColors: true, roughness: 0.88, side: DoubleSide }); if (detail) applyDetailMaps(m, detail); mk(matte, m, 'furniture-matte'); }
   mk(shade, new MeshStandardMaterial({ vertexColors: true, roughness: 1, side: DoubleSide, emissive: '#ffd6a0', emissiveIntensity: 0.55 }), 'furniture-shades');
+  if (glassParts.length) { const gm = new Mesh(F.merge(glassParts), new MeshStandardMaterial({ color: '#dceef4', transparent: true, opacity: 0.28, roughness: 0.05, metalness: 0.1, side: DoubleSide })); gm.name = 'furniture-glass'; gm.renderOrder = 10; gm.userData.role = 'furniture'; gm.userData.noCollide = false; g.add(gm); }
   // холсты: UV в [0,1] по картине — текстура из двух работ, каждому холсту своя половина
   if (art.length) {
     art.forEach((c, i) => { const uv = c.getAttribute('uv'); if (uv) for (let k = 0; k < uv.count; k++) uv.setX(k, uv.getX(k) * 0.5 + (i % 2) * 0.5); });
