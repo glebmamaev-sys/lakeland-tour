@@ -11,7 +11,7 @@ import { BufferGeometry, Float32BufferAttribute } from 'three';
 import type { PathNet } from './Paths';
 
 export type Grid = { h: Float32Array; x0: number; z0: number; step: number; nx: number; nz: number };
-export type Wall = { pts: [number, number][]; level: number; hw: number; taper: [boolean, boolean]; low: 1 | -1 }; // low: сторона нижнего газона относительно хода полилинии (+1 = слева)
+export type Wall = { pts: [number, number][]; level: number; hw: number; taper: [number, number]; low: 1 | -1 }; // taper: длина сведения высоты к нулю на концах, м (0 — без) // low: сторона нижнего газона относительно хода полилинии (+1 = слева)
 export type Stair = { x: number; z: number; dir: [number, number]; level: number; hw: number; run: number; width: number }; // x,z — верхняя кромка (линия стенки), dir — вниз по склону
 export type Terraces = { walls: Wall[]; stairs: Stair[]; fixed: Uint8Array; mask: Uint8Array; h: Float32Array; shift: Float32Array; blobs: number }; // shift: сдвиг вершин сетки (x,z) к граням стенок
 
@@ -19,7 +19,7 @@ export const SLOPE_MAX = 0.30; // круче 1:3,3 — террасируем
 export const WALL_MAX = 1.3;   // м, гравитационная стенка без расчёта
 export const WALL_T = 0.7;     // толщина стенки (гравитационная, бут)
 export const STAIR_W = 3.0;    // ширина лестницы (дорожка 2,6 м)
-const RISER = 0.15, TAPER = 3.0, MIN_CELLS = 80, MIN_LEN = 4.0, GAP = STAIR_W / 2 + 0.5;
+const RISER = 0.15, TAPER = 3.0, TAPER_CUT = 1.5, MIN_CELLS = 80, MIN_LEN = 4.0, GAP = STAIR_W / 2 + 0.5;
 
 function hAt(g: Grid, x: number, z: number): number { const i = Math.max(0, Math.min(g.nx - 1, Math.round((x - g.x0) / g.step))), j = Math.max(0, Math.min(g.nz - 1, Math.round((z - g.z0) / g.step))); return g.h[j * g.nx + i]; }
 
@@ -86,7 +86,7 @@ function smooth(p: [number, number][]): [number, number][] {
 }
 
 /** План террас: стенки, лестницы, зафиксированные клетки и их отметки для повторной релаксации газона. */
-export function planTerraces(g: Grid, fixed: Uint8Array, skip: (x: number, z: number) => boolean, net: PathNet): Terraces {
+export function planTerraces(g: Grid, fixed: Uint8Array, skip: (x: number, z: number) => boolean, net: PathNet, withStairs = true): Terraces {
   const { h, x0, z0, step, nx, nz } = g; const N = nx * nz;
   // 1) уклон (центральные разности), сглаженный 3×3; крутые клетки вне площадок, воды и за границей
   const grad = new Float32Array(N);
@@ -136,7 +136,7 @@ export function planTerraces(g: Grid, fixed: Uint8Array, skip: (x: number, z: nu
           if (near[i].d < GAP) { // разрыв
             let j = i; let best = i; while (j < line.length && near[j].d < GAP) { if (near[j].d < near[best].d) best = j; j++; }
             const gapLen = lineLength(line.slice(i, j));
-            if (gapLen < 7 && near[best].d < 1.5) {
+            if (withStairs && gapLen < 7 && near[best].d < 1.5) {
               const [x, z] = line[best]; let [dx, dz] = near[best].dir;
               if (hAt(g, x + dx * 1.5, z + dz * 1.5) > hAt(g, x - dx * 1.5, z - dz * 1.5)) { dx = -dx; dz = -dz; }
               stairs.push({ x, z, dir: [dx, dz], level, hw, run: 2 * hw, width: STAIR_W });
@@ -145,7 +145,7 @@ export function planTerraces(g: Grid, fixed: Uint8Array, skip: (x: number, z: nu
           }
           let j = i; while (j < line.length && near[j].d >= GAP) j++;
           const seg = line.slice(i, j);
-          if (lineLength(seg) >= 2.5) walls.push({ pts: seg, level, hw, taper: [i === 0, j === line.length], low });
+          if (lineLength(seg) >= 2.5) walls.push({ pts: seg, level, hw, taper: [i === 0 ? TAPER : TAPER_CUT, j === line.length ? TAPER : TAPER_CUT], low }); // у дорожки стенка сходит на нет за 1,5 м
           i = j;
         }
       }
@@ -165,7 +165,7 @@ export function planTerraces(g: Grid, fixed: Uint8Array, skip: (x: number, z: nu
   for (const w of walls) {
     const cum = [0]; for (let i = 1; i < w.pts.length; i++) cum.push(cum[i - 1] + Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]));
     const total = cum[cum.length - 1];
-    const hwAt = (s: number) => w.hw * Math.min(1, w.taper[0] ? s / TAPER : 1, w.taper[1] ? (total - s) / TAPER : 1);
+    const hwAt = (s: number) => w.hw * Math.min(1, w.taper[0] ? s / w.taper[0] : 1, w.taper[1] ? (total - s) / w.taper[1] : 1);
     for (let i = 1; i < w.pts.length; i++) {
       const [ax, az] = w.pts[i - 1], [bx, bz] = w.pts[i];
       const tx = bx - ax, tz = bz - az; const L = Math.hypot(tx, tz) || 1; const nlx = (-tz / L) * w.low, nlz = (tx / L) * w.low; // нормаль к нижнему газону
@@ -192,16 +192,16 @@ export function planTerraces(g: Grid, fixed: Uint8Array, skip: (x: number, z: nu
 }
 
 // ——— геометрия ———
-type Tri = { P: number[]; U: number[] };
+export type Tri = { P: number[]; U: number[] };
 function quad(T: Tri, a: number[], b: number[], c: number[], d: number[], ua: number[], ub: number[], uc: number[], ud: number[]) {
   T.P.push(...a, ...b, ...c, ...a, ...c, ...d); T.U.push(...ua, ...ub, ...uc, ...ua, ...uc, ...ud);
 }
-function finish(T: Tri): BufferGeometry | null {
+export function finish(T: Tri): BufferGeometry | null {
   if (!T.P.length) return null;
   const g = new BufferGeometry(); g.setAttribute('position', new Float32BufferAttribute(T.P, 3)); g.setAttribute('uv', new Float32BufferAttribute(T.U, 2)); g.computeVertexNormals(); return g;
 }
 /** Параллелепипед по 8 углам: низ b0..b3 и верх t0..t3 (против часовой сверху), UV в метрах. */
-function hexa(T: Tri, b: number[][], t: number[][]) {
+export function hexa(T: Tri, b: number[][], t: number[][]) {
   // обход углов — против часовой при взгляде сверху (нормаль верха вверх); иначе переворачиваем порядок
   const ny = (t[1][0] - t[0][0]) * (t[2][2] - t[0][2]) - (t[1][2] - t[0][2]) * (t[2][0] - t[0][0]);
   if (ny > 0) { b = [b[0], b[3], b[2], b[1]]; t = [t[0], t[3], t[2], t[1]]; }
@@ -218,7 +218,7 @@ export function wallGeometry(walls: Wall[]): BufferGeometry | null {
     const n = w.pts.length; if (n < 2) continue;
     const cum = [0]; for (let i = 1; i < n; i++) cum.push(cum[i - 1] + Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]));
     const total = cum[n - 1];
-    const hwAt = (s: number) => w.hw * Math.min(1, w.taper[0] ? s / TAPER : 1, w.taper[1] ? (total - s) / TAPER : 1);
+    const hwAt = (s: number) => w.hw * Math.min(1, w.taper[0] ? s / w.taper[0] : 1, w.taper[1] ? (total - s) / w.taper[1] : 1);
     const F: number[][] = [], B: number[][] = [], yT: number[] = [], yB: number[] = [];
     for (let i = 0; i < n; i++) {
       const a = w.pts[Math.max(0, i - 1)], c = w.pts[Math.min(n - 1, i + 1)]; const tx = c[0] - a[0], tz = c[1] - a[1]; const L = Math.hypot(tx, tz) || 1;

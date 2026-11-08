@@ -40,8 +40,7 @@ export function buildPathNetwork(houses: HouseLite[], entrance: [number, number]
   lines.push([mid1, p24, p25, v3]);
   // короткие подъезды к домам 2.x (южная сторона, где старт одиночной прогулки) и к вилле 2.2
   lines.push([mid1, p21]); lines.push([mid2, p22]); lines.push([mid1, p23]);
-  // пешеходные спуски вдоль ряда 1.x к террасам (восточная сторона каждого дома)
-  for (const id of ['1.1', '1.2', '1.3', '1.4', '1.5']) { const h = H(id); lines.push([L(h, 11.5, -29.5), L(h, 11.5, -6), L(h, 11.5, 4)]); }
+  // спусков вдоль восточной стороны вилл 1.x больше нет: полоса x=11,5 — внутри пятна дома (его собственные террасы и лестницы)
   const nodes: Vector3[] = []; for (const l of lines) for (const p of l) if (!nodes.some((n) => n.distanceTo(p) < 0.5)) nodes.push(p.clone());
   return { lines, nodes };
 }

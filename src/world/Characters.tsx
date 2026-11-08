@@ -310,7 +310,7 @@ function distToHouses(houses: HouseLite[], x: number, z: number): number {
 }
 
 /** Ищет ровный газон 12×8 м: внутри участка, ≥4 м от домов, ≥3 м от дорожек, перепад по углам < 1 м. */
-export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number, z: number) => number | null, inSite: (x: number, z: number) => boolean, seed = 3): [number, number, number, number] | null {
+export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number, z: number) => number | null, inSite: (x: number, z: number) => boolean, seed = 3, water: (x: number, z: number) => boolean = () => false): [number, number, number, number] | null {
   const r = rng(seed); let best: { s: number; rect: [number, number, number, number] } | null = null;
   const dbg = { site: 0, house: 0, path: 0, null: 0, slope: 0, ok: 0 }; (window as unknown as { __lawnDbg: unknown }).__lawnDbg = dbg;
   for (let k = 0; k < 5000; k++) {
@@ -320,8 +320,8 @@ export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number
     const dh = Math.min(...corners.map(([x, z]) => distToHouses(houses, x, z))); if (dh < 3) { dbg.house++; continue; } // не под террасами и фундаментами
     const dp = Math.min(...corners.map(([x, z]) => distToPaths(net, x, z))); if (dp < 2.5) { dbg.path++; continue; }
     const hs = corners.map(([x, z]) => heightAt(x, z)); if (hs.some((v) => v === null)) { dbg.null++; continue; }
-    // вокруг площадки (+3 м) ни одной точки воды: косилка не должна ездить по берегу и по воде
-    let wet = false; for (let x = cx - w / 2 - 3; x <= cx + w / 2 + 3 && !wet; x += 1) for (let z = cz - d / 2 - 3; z <= cz + d / 2 + 3; z += 1) if (heightAt(x, z) === null || !inSite(x, z)) { wet = true; break; }
+    // вокруг площадки (+8 м) ни одной точки воды: косилка не должна ездить по берегу и по воде
+    let wet = false; for (let x = cx - w / 2 - 8; x <= cx + w / 2 + 8 && !wet; x += 1) for (let z = cz - d / 2 - 8; z <= cz + d / 2 + 8; z += 1) if (heightAt(x, z) === null || !inSite(x, z) || water(x, z)) { wet = true; break; } // от воды не ближе 8 м
     if (wet) { dbg.null++; continue; }
     const range = Math.max(...(hs as number[])) - Math.min(...(hs as number[])); if (range > 1.6) { dbg.slope++; continue; }
     dbg.ok++;
@@ -331,9 +331,9 @@ export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number
   return best?.rect ?? null;
 }
 
-export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shrubs = [], lagoon = [120, 0], idlers = [], terraceSpots = [] }: {
+export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shrubs = [], lagoon = [120, 0], idlers = [], terraceSpots = [], water }: {
   net: PathNet; heightAt: (x: number, z: number) => number | null; houses: HouseLite[]; pools: Box3[]; inSite: (x: number, z: number) => boolean; audioBase?: string;
-  shrubs?: { x: number; y: number; z: number }[]; lagoon?: [number, number]; idlers?: IdlerSpec[]; terraceSpots?: TerraceSpotW[];
+  shrubs?: { x: number; y: number; z: number }[]; lagoon?: [number, number]; idlers?: IdlerSpec[]; terraceSpots?: TerraceSpotW[]; water?: (x: number, z: number) => boolean;
 }) {
   const root = useRef<Group>(null);
   const chars = useGLTF(CHAR_IDS.map((id) => `${audioBase}models/chars/${id}.glb`)) as unknown as CharGltf[];
@@ -362,7 +362,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
       }
     });
     // садовник с косилкой на самом ровном газоне
-    const lawn = findLawn(houses, net, heightAt, inSite);
+    const lawn = findLawn(houses, net, heightAt, inSite, 3, water);
     let gardener: Gardener | null = null;
     if (lawn) {
       const h = makeSkinnedHuman(charOf('m_farmer'), false, 500); const mower = makeMower();
@@ -429,7 +429,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     }
     return { graph, walkers, swimmers, gardener, sunbathers, waterer, birds, standing };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [net, heightAt, houses, pools, inSite, shrubs, lagoon, idlers, terraceSpots, chars]);
+  }, [net, heightAt, houses, pools, inSite, shrubs, lagoon, idlers, terraceSpots, chars, water]);
 
   useEffect(() => {
     const g = root.current; if (!g) return;
