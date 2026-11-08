@@ -22,8 +22,11 @@ export function ModelPlants({ url, items, place, castShadow = true }: ModelPlant
       const mat = (Array.isArray(m.material) ? m.material[0] : m.material) as MeshStandardMaterial;
       // палитра Kenney (бирюзовая листва, unlit, metalness 1) → наши тона: листва зелёная, кора коричневая, цветы как есть
       const name = (mat.name || '').toLowerCase(); const src = mat.color ? mat.color.clone() : new Color('#888');
-      const color = /leaf|grass|foliage/.test(name) ? new Color('#4f8a3c') : /wood|bark|trunk/.test(name) ? new Color('#7a5a3c') : src;
-      const mm = new MeshStandardMaterial({ color, roughness: 0.92, metalness: 0, side: DoubleSide, map: mat.map ?? null });
+      // текстурные модели (Quaternius): карта цвета, нормали, листва с вырезом по альфе; палитровые (Kenney) — перекрас
+      const textured = !!mat.map;
+      const color = textured ? new Color('#ffffff') : /leaf|grass|foliage/.test(name) ? new Color('#4f8a3c') : /wood|bark|trunk/.test(name) ? new Color('#7a5a3c') : src;
+      const mm = new MeshStandardMaterial({ color, roughness: 0.9, metalness: 0, side: DoubleSide, map: mat.map ?? null, normalMap: mat.normalMap ?? null });
+      if (textured && /leaf|leaves|flower|plant/.test(name)) { mm.alphaTest = 0.5; mm.transparent = false; }
       list.push({ geometry: m.geometry, material: mm, local: m.matrixWorld.clone() });
     });
     return { list, h, base };

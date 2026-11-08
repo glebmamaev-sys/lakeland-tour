@@ -729,14 +729,17 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         ? <><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>
         : <Suspense fallback={<><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>}>
             {/* модели Kenney Nature Kit (CC0): пальмы трёх видов (ближние), кусты трёх видов, деревья вместо франжипани; дальние пальмы — процедурные */}
-            <ModelPlants url={asset('models/nature/tree_palmDetailedTall.glb')} items={built.near.filter((_, i) => i % 3 === 0)} place={placePalm} />
-            <ModelPlants url={asset('models/nature/tree_palmBend.glb')} items={built.near.filter((_, i) => i % 3 === 1)} place={placePalm} />
-            <ModelPlants url={asset('models/nature/tree_palmDetailedShort.glb')} items={built.near.filter((_, i) => i % 3 === 2)} place={placePalmShort} />
+            {/* Quaternius Ultimate Stylized Nature (CC0): текстурные пальмы четырёх видов, кусты (в т.ч. цветущие), клён вместо франжипани */}
+            <ModelPlants url={asset('models/nature/q_PalmTree_1.glb')} items={built.near.filter((_, i) => i % 4 === 0)} place={placePalm} />
+            <ModelPlants url={asset('models/nature/q_PalmTree_2.glb')} items={built.near.filter((_, i) => i % 4 === 1)} place={placePalm} />
+            <ModelPlants url={asset('models/nature/q_PalmTree_3.glb')} items={built.near.filter((_, i) => i % 4 === 2)} place={placePalmShort} />
+            <ModelPlants url={asset('models/nature/q_PalmTree_4.glb')} items={built.near.filter((_, i) => i % 4 === 3)} place={placePalm} />
             <Palms near={[]} far={built.far} />
-            <ModelPlants url={asset('models/nature/plant_bushDetailed.glb')} items={built.shrubs.filter((_, i) => i % 3 === 0)} place={placeBush} castShadow={false} />
-            <ModelPlants url={asset('models/nature/plant_bushLarge.glb')} items={built.shrubs.filter((_, i) => i % 3 === 1)} place={placeBush} castShadow={false} />
-            <ModelPlants url={asset('models/nature/plant_bush.glb')} items={built.shrubs.filter((_, i) => i % 3 === 2)} place={placeBush} castShadow={false} />
-            <ModelPlants url={asset('models/nature/tree_detailed.glb')} items={built.frangipani} place={placeTree} />
+            <ModelPlants url={asset('models/nature/q_Bush.glb')} items={built.shrubs.filter((_, i) => i % 4 === 0)} place={placeBush} castShadow={false} />
+            <ModelPlants url={asset('models/nature/q_Bush_Large.glb')} items={built.shrubs.filter((_, i) => i % 4 === 1)} place={placeBush} castShadow={false} />
+            <ModelPlants url={asset('models/nature/q_Bush_Flowers.glb')} items={built.shrubs.filter((_, i) => i % 4 === 2)} place={placeBush} castShadow={false} />
+            <ModelPlants url={asset('models/nature/q_Bush_Large_Flowers.glb')} items={built.shrubs.filter((_, i) => i % 4 === 3)} place={placeBush} castShadow={false} />
+            <ModelPlants url={asset('models/nature/q_MapleTree_1.glb')} items={built.frangipani} place={placeTree} />
           </Suspense>)}
       {data && <Lagoon level={data.c.water_level} />}
       {built && complexStore.heightAt && !lowQ && !new URLSearchParams(location.search).has('nograss') && <Grass heightAt={complexStore.heightAt} ok={built.grassOk} count={Number(new URLSearchParams(location.search).get('grass')) || (input.mobile ? 15_000 : 45_000)} radius={input.mobile ? 18 : 26} />}
