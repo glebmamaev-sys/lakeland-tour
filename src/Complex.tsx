@@ -7,7 +7,7 @@ import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, ExtrudeGeometry,
   Float32BufferAttribute, Group, LOD, Matrix4, Mesh, MeshStandardMaterial, type Object3D,
-  Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3, type Intersection, Quaternion,
+  Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3, type Intersection,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { applyMaterialRules, openDoors, splitComponents } from './materials';
@@ -20,7 +20,7 @@ import { Frangipani, Palms, Shrubs, type Plant } from './world/Vegetation';
 import { Lagoon, WATER_TIME, makeBottomTexture, type Bottom } from './world/Lagoon';
 import { buildPathNetwork, distToPaths, pathRibbon, type PathNet } from './world/Paths';
 import { makeArtTexture, makeNoiseTexture, makeWeaveTexture, type DetailMaps } from './world/textures';
-import { furnishVilla, glassBoxes, waterBoxes, roomRects, type TerraceSpot } from './world/Interiors';
+import { furnishVilla, glassBoxes, waterBoxes, roomRects, stairFlights, type TerraceSpot } from './world/Interiors';
 import type { IdlerSpec } from './world/Characters';
 import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
@@ -28,7 +28,6 @@ import { Grass } from './world/Grass';
 import { planTerraces, wallGeometry, type Terraces } from './world/Terraces';
 import { gradePaths, stepGeometry, type Graded } from './world/PathGrade';
 import { buildIndoor, indoorAt, type IndoorMask } from './world/Indoor';
-import * as F from './world/Furniture';
 import { DataTexture, NearestFilter, RedFormat, UnsignedByteType, Vector2 } from 'three';
 import { Lotuses, placeLotuses, type LotusItem } from './world/Lotus';
 import { ModelPlants } from './world/ModelPlants';
@@ -180,42 +179,63 @@ function siteSampler(c: ComplexData, h: Float32Array) {
   };
 }
 
-/** Сантехника из Revit пришла с «деревянным» материалом (серый 0,5 → орех): ванны и раковины в санузлах (комнаты
- *  «Toilet & Bath» плана, коробка вокруг метки) из мешей роли walnut отделяются в белый глянцевый акрил. */
-function whitenBath(scene: Object3D, plan: Plan, glass: Box3[]) {
-  // коробки санузлов — точные прямоугольники комнат плана (+15 см): квадрат вокруг метки захватывал соседние спальни,
-  // и растение с тумбой у кровати становились белой «сантехникой»
-  const boxes: Box3[] = roomRects(plan, glass, (n) => n.toLowerCase().includes('toilet & bath')).map(({ rect, level }) => new Box3(new Vector3(rect.x0 - 0.15, level - 0.3, rect.z0 - 0.15), new Vector3(rect.x1 + 0.15, level + 2.3, rect.z1 + 0.15)));
+/** Удаляет из мешей шаблона связные компоненты внутри коробок, подходящие под предикат (размеры в мире): остаток меша
+ *  возвращается с тем же материалом. Используется для балясин лестниц, сантехники и кроватей Revit. */
+function stripComponents(scene: Object3D, boxes: Box3[], pred: (sz: Vector3, tris: number) => boolean, roles: string[], tag: string, villa: string) {
   if (!boxes.length) return;
-  const acrylic = new MeshStandardMaterial({ color: '#f7f6f2', roughness: 0.12, metalness: 0, side: DoubleSide });
-  const targets: Mesh[] = []; scene.traverse((o) => { const m = o as Mesh; if (m.isMesh && !m.userData.curtain && ['walnut', 'plants', 'default', 'textured', 'stucco'].includes(m.userData.role as string)) targets.push(m); });
-  const tubPred = (sz: Vector3) => { const L = Math.max(sz.x, sz.z), Wd = Math.min(sz.x, sz.z); return L >= 1.3 && L <= 2.4 && Wd >= 0.6 && Wd <= 1.3 && sz.y >= 0.3 && sz.y <= 0.95; };
+  const targets: Mesh[] = []; scene.traverse((o) => { const m = o as Mesh; if (m.isMesh && !m.userData.curtain && roles.includes(m.userData.role as string)) targets.push(m); });
+  let removed = 0; const log: string[] = [], miss: string[] = [];
   for (const m of targets) {
-    // в каждом санузле: вырезаем куски меша внутри комнаты, среди них ищем связный кусок размером с ванну и ставим вместо
-    // него процедурную; остальные куски возвращаем (дерево — белым акрилом, прочее — исходным материалом)
-    const restMat = m.userData.role === 'walnut' || m.userData.role === 'plants' ? acrylic : (m.material as MeshStandardMaterial);
-    const rest: BufferGeometry[] = [];
-    for (const b of boxes) {
-      const piece = splitOutBoxes(m, [b]); if (!piece) continue;
-      const tmp = new Mesh(piece); tmp.position.copy(m.position); tmp.quaternion.copy(m.quaternion); tmp.scale.copy(m.scale); m.parent?.add(tmp); tmp.updateWorldMatrix(true, false);
-      let tubGeom: BufferGeometry | null = null;
-      const part = splitComponents(tmp, tubPred);
-      if (part) tubGeom = part.geometry;
-      else { const sz = new Box3().setFromBufferAttribute(piece.getAttribute('position') as BufferAttribute).applyMatrix4(tmp.matrixWorld).getSize(new Vector3()); if (tubPred(sz)) { tubGeom = tmp.geometry; tmp.geometry = new BufferGeometry(); } }
-      if (tubGeom && tubGeom.getAttribute('position')) {
-        const wb = new Box3().setFromBufferAttribute(tubGeom.getAttribute('position') as BufferAttribute).applyMatrix4(tmp.matrixWorld); const sz = wb.getSize(new Vector3());
-        const tub = new Mesh(F.bathtub(Math.min(Math.max(sz.x, sz.z), 1.9), Math.min(Math.min(sz.x, sz.z), 0.9)), acrylic);
-        const holder = new Group(); scene.add(holder); scene.updateMatrixWorld(true);
-        holder.position.copy(scene.worldToLocal(new Vector3((wb.min.x + wb.max.x) / 2, wb.min.y, (wb.min.z + wb.max.z) / 2)));
-        const sq = new Quaternion(); scene.getWorldQuaternion(sq); holder.quaternion.copy(sq.invert()); if (sz.x < sz.z) tub.rotation.y = Math.PI / 2;
-        tub.userData.role = 'default'; tub.castShadow = true; tub.receiveShadow = true; tub.name = 'bathtub'; holder.add(tub);
-        console.info('[bath]', plan.villa, m.userData.role, 'ванна заменена', { L: +Math.max(sz.x, sz.z).toFixed(2), W: +Math.min(sz.x, sz.z).toFixed(2) });
-      }
-      const posA = tmp.geometry.getAttribute('position'); m.parent?.remove(tmp);
-      if (posA && posA.count) rest.push(tmp.geometry);
+    const piece = splitOutBoxes(m, boxes); if (!piece) continue;
+    const tmp = new Mesh(piece); tmp.position.copy(m.position); tmp.quaternion.copy(m.quaternion); tmp.scale.copy(m.scale); m.parent?.add(tmp); tmp.updateWorldMatrix(true, false);
+    const part = splitComponents(tmp, (sz, n) => { const ok = pred(sz, n); if (ok) log.push(`${m.userData.role} ${sz.x.toFixed(2)}×${sz.y.toFixed(2)}×${sz.z.toFixed(2)}`); else if (Math.max(sz.x, sz.z) > 1.0 && sz.y < 1.6) miss.push(`${m.userData.role} ${sz.x.toFixed(2)}×${sz.y.toFixed(2)}×${sz.z.toFixed(2)}`); return ok; });
+    if (part) removed++;
+    else { // все компоненты куска подходят — убираем кусок целиком
+      const sz = new Box3().setFromBufferAttribute(piece.getAttribute('position') as BufferAttribute).applyMatrix4(tmp.matrixWorld).getSize(new Vector3());
+      if (pred(sz, (piece.getAttribute('position').count / 3) | 0)) { log.push(`${m.userData.role} ${sz.x.toFixed(2)}×${sz.y.toFixed(2)}×${sz.z.toFixed(2)} (весь кусок)`); tmp.geometry = new BufferGeometry(); removed++; }
     }
-    for (const g of rest) { const nm = new Mesh(g, restMat); nm.position.copy(m.position); nm.quaternion.copy(m.quaternion); nm.scale.copy(m.scale); nm.userData.role = m.userData.role === 'walnut' || m.userData.role === 'plants' ? 'default' : m.userData.role; nm.castShadow = true; nm.receiveShadow = true; nm.name = m.name + '-bath'; m.parent?.add(nm); }
+    m.parent?.remove(tmp);
+    const posA = tmp.geometry.getAttribute('position'); if (posA && posA.count) { const nm = new Mesh(tmp.geometry, m.material); nm.position.copy(m.position); nm.quaternion.copy(m.quaternion); nm.scale.copy(m.scale); nm.userData.role = m.userData.role; nm.castShadow = true; nm.receiveShadow = true; nm.name = m.name + '-' + tag; m.parent?.add(nm); }
   }
+  console.info(`[${tag}]`, villa, 'убрано компонентов:', log.length, 'из мешей:', removed, log.slice(0, 12).join(' | '), '— не подошли:', miss.slice(0, 10).join(' | '));
+}
+/** Балясины лестниц Revit — пучок тонких стержней, торчащих в разные стороны: внутри лестничных клеток плана тонкие
+ *  высокие компоненты (≤ 12 см в плане, ≥ 45 см высотой) убираются; перила ставит furnishVilla по уклону марша. */
+function stripBalusters(scene: Object3D, plan: Plan) {
+  const boxes: Box3[] = [];
+  // отрезки лестниц в плане покрывают марш не целиком — коробка с запасом 2,5 м по горизонтали
+  for (const l of plan.levels) for (const r of stairFlights(l.stairs)) boxes.push(new Box3(new Vector3(r.x0 - 2.5, l.level - 0.2, r.z0 - 2.5), new Vector3(r.x1 + 2.5, l.level + 4.0, r.z1 + 2.5)));
+  // стержень (≤ 12 см в плане, выше 45 см) или цельная секция ограждения (балясины сцеплены с поручнем: тонкая ≤ 25 см,
+  // высотой 0,8–1,6 м, длиной до 4,5 м); стены выше 2,4 м и двери 2,1 м не подходят
+  const pred = (sz: Vector3) => (Math.max(sz.x, sz.z) < 0.12 && sz.y > 0.45) || (Math.min(sz.x, sz.z) <= 0.25 && sz.y >= 0.8 && sz.y <= 1.6 && Math.max(sz.x, sz.z) <= 4.5 && Math.max(sz.x, sz.z) >= 0.5);
+  stripComponents(scene, boxes, pred, ['default', 'paint', 'textured', 'walnut', 'plants', 'stucco'], 'stairs', plan.villa);
+}
+/** Сантехника Revit (серые ванны-корыта, раковины на весу, «через стены») убирается целиком: в санузлах («Toilet & Bath»)
+ *  все компоненты размером с предмет (ниже 1,5 м, до 3,2 м в плане); свою ванну, умывальник и унитаз ставит furnishBath. */
+function clearBaths(scene: Object3D, plan: Plan, glass: Box3[]) {
+  // контур санузла с запасом 0,45 м: столешницы в нишах лежали за контуром заливки и оставались висеть в воздухе
+  const boxes = roomRects(plan, glass, (n) => n.toLowerCase().includes('toilet & bath')).map(({ rect, level }) => new Box3(new Vector3(rect.x0 - 0.45, level - 0.3, rect.z0 - 0.45), new Vector3(rect.x1 + 0.45, level + 2.3, rect.z1 + 0.45)));
+  stripComponents(scene, boxes, (sz) => sz.y < 1.5 && Math.max(sz.x, sz.z) < 3.2 && Math.max(sz.x, sz.y, sz.z) > 0.12, ['walnut', 'plants', 'default', 'textured', 'stucco', 'paint', 'ceiling', 'slats', 'mosaic', 'wallstone', 'paving'], 'bath', plan.villa); // paving: каменные столешницы Revit классифицируются как мощение
+  // столешница виллы 1 сцеплена с плитой пола в один компонент (9,7 × 6,4 м) — по компонентам не ловится; внутри контура
+  // санузла (+0,35 м за контур, ниши в стенах) срезаем предметы в полосе 45–130 см над полом: пол, подиумы и стены остаются
+  const bands = roomRects(plan, glass, (n) => n.toLowerCase().includes('toilet & bath')).map(({ rect, level }) => new Box3(new Vector3(rect.x0 - 0.35, level + 0.45, rect.z0 - 0.35), new Vector3(rect.x1 + 0.35, level + 1.3, rect.z1 + 0.35))); // от 45 см: подиумы остаются; +0,35 м за контур — столешницы в нишах стен (стены роли stucco/paint не режем)
+  let cut = 0; const targets: Mesh[] = []; scene.traverse((o) => { const m = o as Mesh; if (m.isMesh && !m.userData.curtain && ['default', 'textured', 'paving'].includes(m.userData.role as string)) targets.push(m); });
+  for (const m of targets) { const piece = splitOutBoxes(m, bands); if (piece) { cut += (piece.getAttribute('position').count / 3) | 0; piece.dispose(); } }
+  if (cut) console.info('[bath]', plan.villa, 'срезано треугольников в полосе над полом санузлов:', cut);
+}
+/** Кровати Revit — белые платформы и матрасы без текстур: в спальнях компоненты размером с кровать (высота до 1 м,
+ *  1,4–3,4 × 0,8–2,6 м в плане) и мелочь на них (подушки) убираются; кровать по стайл-гайду ставит furnishBedroom. */
+function clearBeds(scene: Object3D, plan: Plan, glass: Box3[]) {
+  const boxes = roomRects(plan, glass, (n) => n.toLowerCase().includes('bedroom')).map(({ rect, level }) => new Box3(new Vector3(rect.x0 - 0.05, level + 0.02, rect.z0 - 0.05), new Vector3(rect.x1 + 0.05, level + 1.3, rect.z1 + 0.05)));
+  const bedLike = (sz: Vector3) => { const L = Math.max(sz.x, sz.z), S = Math.min(sz.x, sz.z); return sz.y <= 1.0 && L >= 1.4 && L <= 3.4 && S >= 0.7 && S <= 2.6; };
+  stripComponents(scene, boxes, bedLike, ['default', 'textured', 'stucco', 'paint', 'walnut', 'ceiling', 'slats', 'mosaic', 'wallstone'], 'beds', plan.villa);
+  // у виллы 1 платформа кровати сцеплена с полом в один компонент — по компонентам не ловится. Срезаем в спальне всё,
+  // что лежит в полосе 6–80 см над полом внутри комнаты (отступ 0,3 м от стен, чтобы не задеть стены и дверные коробки):
+  // пол (на отметке уровня) и стены остаются, платформа/матрас уходят
+  const bands = roomRects(plan, glass, (n) => n.toLowerCase().includes('bedroom')).filter(({ rect }) => rect.x1 - rect.x0 > 1.2 && rect.z1 - rect.z0 > 1.2).map(({ rect, level }) => new Box3(new Vector3(rect.x0 + 0.3, level + 0.06, rect.z0 + 0.3), new Vector3(rect.x1 - 0.3, level + 0.8, rect.z1 - 0.3)));
+  let cut = 0; const targets: Mesh[] = []; scene.traverse((o) => { const m = o as Mesh; if (m.isMesh && !m.userData.curtain && ['default', 'textured', 'stucco', 'paint', 'ceiling'].includes(m.userData.role as string)) targets.push(m); });
+  for (const m of targets) { const piece = splitOutBoxes(m, bands); if (piece) { cut += (piece.getAttribute('position').count / 3) | 0; piece.dispose(); } }
+  if (cut) console.info('[beds]', plan.villa, 'срезано треугольников в полосе над полом спален:', cut);
 }
 /** Вырезает из меша треугольники с центром (мир) внутри любой из коробок: возвращает их геометрию, меш остаётся без них. */
 function splitOutBoxes(m: Mesh, boxes: Box3[]): BufferGeometry | null {
@@ -289,6 +309,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const plan = data.plans[MODEL_IDS[k]];
       if (plan && !g.scene.getObjectByName('furniture')) {
         const t1 = performance.now();
+        if (!g.scene.userData.balustersDone) { const gl0 = glassBoxes(g.scene); stripBalusters(g.scene, plan); clearBaths(g.scene, plan, gl0); clearBeds(g.scene, plan, gl0); g.scene.userData.balustersDone = true; }
         const colT = buildCollider(g.scene); const rayS = new Ray(new Vector3(), new Vector3(0, -1, 0));
         const support = colT ? (x: number, y: number, z: number) => { rayS.origin.set(x, y + 0.35, z); const hs = colT.bvh.raycast(rayS, DoubleSide); return hs.some((ht) => ht.distance < 0.9); } : null;
         // препятствие: между полом +12 см и +1,5 м над точкой есть поверхность модели (мебель Revit, подоконники, выступы)
@@ -296,12 +317,13 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         const obstacle = colT ? (x: number, y: number, z: number) => { rayS.origin.set(x, y + 1.5, z); const hs = colT.bvh.raycast(rayS, DoubleSide); let top: number | null = null; for (const ht of hs) if (ht.distance > 0.02 && ht.distance < 1.5 - 0.12) { const hy = y + 1.5 - ht.distance; if (top === null || hy > top) top = hy; } return top; } : null;
         // есть ли стена: луч горизонтально в сторону n от точки в 0,4 м перед стеной на высоте 1,3 м, попадание ближе 0,9 м
         const rayH = new Ray(); const wallAt = colT ? (x: number, y: number, z: number, nx: number, nz: number) => { rayH.origin.set(x - nx * 0.4, y + 1.3, z - nz * 0.4); rayH.direction.set(nx, 0, nz).normalize(); return colT.bvh.raycast(rayH, DoubleSide).some((ht) => ht.distance < 0.9); } : null;
-        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex(), detailMaps(tex.walnut), waterBoxes(g.scene), support, obstacle, wallAt);
+        // верх любой поверхности над точкой в пределах 4 м (для уклона лестничных маршей)
+        const topAt = colT ? (x: number, y: number, z: number) => { rayS.origin.set(x, y + 4, z); const hs = colT.bvh.raycast(rayS, DoubleSide); let top: number | null = null; for (const ht of hs) if (ht.distance > 0.02 && ht.distance < 3.95) { const hy = y + 4 - ht.distance; if (top === null || hy > top) top = hy; } return top; } : null;
+        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex(), detailMaps(tex.walnut), waterBoxes(g.scene), support, obstacle, wallAt, topAt);
         colT?.geometry.dispose();
         furn.applyMatrix4(g.scene.matrixWorld.clone().invert()); g.scene.add(furn); g.scene.updateMatrixWorld(true);
         console.info('[furniture]', MODEL_IDS[k], furn.children.map((m) => ((m as Mesh).geometry.getAttribute('position').count / 3) | 0), 'tris in', (performance.now() - t1) | 0, 'ms');
       }
-      if (plan && !g.scene.userData.bathDone) { whitenBath(g.scene, plan, glassBoxes(g.scene)); g.scene.userData.bathDone = true; }
       // вилла 3: шторы Revit закрывали остеклённый фасад сплошной стеной — убираем, остаются стеклянные раздвижные двери
       if (MODEL_IDS[k] === 'villa3') g.scene.traverse((o) => { if (o.userData.curtain) { o.visible = false; o.userData.noCollide = true; } });
       if (plan && !indoorMasks.has(MODEL_IDS[k])) {
@@ -492,7 +514,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // Revit в пределах [нижний уровень −3,4; верх +0,2], вилла 1 (ступенчатая) — рельеф Revit в [−0,15; +10,2].
       // Раньше брался «верх» рельефа Revit как есть — у 2.x он на 1–2 м выше пола (окна уходили в землю)
       const PAD_RANGE: Record<string, [number, number] | null> = { villa21: null, villa22: null, villa3: [-3.4, 0.2], villa1: [-0.15, 10.2] };
-      inHouseMask = new Uint8Array(nx * nz);
+      inHouseMask = new Uint8Array(nx * nz); const noHit = new Uint8Array(nx * nz);
       for (const inst of instances) {
         const id = inst.name.slice('house-'.length);
         const hi = houses.find((x) => x.id === id); const gb = hi && groundBVH.current.get(hi.model);
@@ -518,10 +540,25 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
             // рельеф Revit под домом вырезан: клетка всё равно фиксируется (не ниже нижнего пола), отметку полов
             // комнат ей даст вырезка под полами ниже; раньше такие клетки оставались свободными, и мембрана
             // проводила сквозь комнаты гладкий склон — газон внутри санузлов виллы 1
-            else top = Math.max(h[k], floorY + range[0]); // не ниже нижнего уровня дома (вилла 3 стоит в пруду на −3,4: иначе вырастал бугор)
+            else { top = Math.max(h[k], floorY + range[0]); noHit[k] = 1; } // рельефа Revit нет (вырезан площадкой здания) — отметку даст заполнение ниже
           }
           h[k] = fixed[k] ? Math.min(h[k], top) : top; fixed[k] = 1; // стык двух площадок — по нижней
         }
+      }
+      // клетки пятна без рельефа Revit (вырезка под зданием) брали естественный склон — у виллы 1 земля во дворе между
+      // бассейном и входом уходила на 3–4 м ниже пола, «пол левитирует». Заполняем их волной от соседних клеток
+      // площадок с известной отметкой: двор получает уровень ближайшей площадки (у входа — улицы)
+      { const q: number[] = []; const known = new Uint8Array(nx * nz);
+        for (let k = 0; k < nx * nz; k++) if (fixed[k] && !noHit[k]) known[k] = 1;
+        for (let k = 0; k < nx * nz; k++) if (noHit[k]) { const i = k % nx; for (const n of [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, k - nx, k + nx]) if (n >= 0 && n < nx * nz && known[n]) { q.push(k); break; } }
+        const src = Float32Array.from(h); let filled = 0;
+        for (let qi = 0; qi < q.length; qi++) {
+          const k = q[qi]; if (known[k]) continue; const i = k % nx; let sum = 0, cnt = 0;
+          for (const n of [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, k - nx, k + nx]) if (n >= 0 && n < nx * nz && known[n]) { sum += h[n]; cnt++; }
+          if (!cnt) continue; h[k] = Math.max(src[k], sum / cnt); known[k] = 1; filled++;
+          for (const n of [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, k - nx, k + nx]) if (n >= 0 && n < nx * nz && noHit[n] && !known[n]) q.push(n);
+        }
+        if (filled) console.info('[pads]', 'клеток пятна без рельефа Revit заполнено отметкой соседних площадок:', filled);
       }
       // выемка под бассейнами и прудами: земля ниже дна воды (вилла 3 стоит в пруду — иначе вода «лужей» у стен)
       // водные меши вилл шире видимых чаш (прямоугольные плоскости): вне пятна дома земля не ниже уровня воды + 0,15,
@@ -585,7 +622,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const i0 = Math.max(0, Math.floor((bx0 - x0) / WX)), i1 = Math.min(wnx - 1, Math.ceil((bx1 - x0) / WX)), j0 = Math.max(0, Math.floor((bz0 - z0) / WX)), j1 = Math.min(wnz - 1, Math.ceil((bz1 - z0) / WX));
       for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
         lp.set(x0 + i * WX, 0, z0 + j * WX).applyMatrix4(inv); const r = indoorAt(m, lp.x, lp.z); const k = j * wnx + i;
-        if (lp.x > hi.fp[0] + 1.2 && lp.x < hi.fp[2] - 1.2 && lp.z > hi.fp[1] + 1.2 && lp.z < hi.fp[3] - 1.2) wbox[k] = 255;
+        // габарит дома прячет рельеф только там, где над землёй есть плита/пол модели (slabTop): под открытыми участками пятна
+        // (сад между корпусами, проезд) земля остаётся — иначе полы «левитировали» над пустотой (замечание заказчика)
+        if (lp.x > hi.fp[0] + 1.2 && lp.x < hi.fp[2] - 1.2 && lp.z > hi.fp[1] + 1.2 && lp.z < hi.fp[3] - 1.2) { const si = Math.max(0, Math.min(nx - 1, Math.round(i * WX / step))), sj = Math.max(0, Math.min(nz - 1, Math.round(j * WX / step))); if (Number.isFinite(slabTop[sj * nx + si])) wbox[k] = 255; }
         if (r.green) wgreen[k] = Number.isNaN(wgreen[k]) ? inst.position.y + r.greenFloor : Math.min(wgreen[k], inst.position.y + r.greenFloor);
         if (!r.inside) continue;
         wmask[k] = 255; wfloor[k] = Math.min(wfloor[k], inst.position.y + r.floor); // 255: текстура R8 нормирована, шейдер сравнивает с 0,5
@@ -622,7 +661,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const shopP = c.buildings.find((b) => b.model === 'shop'); const pose = shopP ? shopPose(shopP, houses, c.site.boundary) : null;
     const net = buildPathNetwork(houses, pose ? pose.door : (WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]),
       pose ? { x: pose.pos[0], z: pose.pos[1], r: pose.r, toward: WALK_SPAWN_XZ } : undefined, houses.map((hh) => ({ x: hh.entry[0], z: hh.entry[2], yaw: hh.entryYaw })),
-      (x, z) => indoorW(x, z) !== null); // «дом» для дорожек — маска стен и комнат, а не габарит: до террас дорожки доходят
+      (x, z) => indoorW(x, z) !== null || pools.some((b) => x > b.min.x - 1.0 && x < b.max.x + 1.0 && z > b.min.z - 1.0 && z < b.max.z + 1.0)); // «дом» для дорожек — маска стен и комнат (до террас дорожки доходят) и бассейны с бортом 1 м
     let terr: Terraces | null = null; let graded: Graded | null = null; let skirtGeom: BufferGeometry | null = null;
     // под магазином земля не выше его пола: пол ставится по отметке у двери (+0,12), цоколь 1,8 м прячет перепад;
     // пятно магазина опускается на 0,5 м ниже отметки у двери и фиксируется, пятачок у двери фиксируется как есть

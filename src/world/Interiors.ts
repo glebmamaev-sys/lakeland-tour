@@ -2,7 +2,7 @@
 // мебель (Furniture.ts) по правилам стайл-гайда: кровать изголовьем к глухой стене, диван лицом к остеклению,
 // ничего в дверных проёмах. Результат — Group в координатах виллы (как в прогулке), 3 меша на виллу.
 import { Box3, BufferGeometry, DoubleSide, Group, Mesh, MeshStandardMaterial, Object3D, Vector3, type Texture } from 'three';
-import type { Plan, PlanLevel } from '../plan';
+import type { Seg, Plan, PlanLevel } from '../plan';
 import type { Passage } from '../models';
 import { labelComponents } from '../materials';
 import * as F from './Furniture';
@@ -109,19 +109,20 @@ class Placer {
   }
   /** Поставить без проверки препятствий модели (на платформу Revit). */
   putForce(g: BufferGeometry, x: number, z: number, yaw: number, w: number, d: number) { const o = this.obsH; this.obsH = null; const ok = this.put(g, x, z, yaw, w, d); this.obsH = o; return ok; }
+  lastWhy = '';
   private ok(x: number, z: number, w: number, d: number, yaw: number, margin = 0.15) {
     const c = Math.abs(Math.cos(yaw)), s = Math.abs(Math.sin(yaw)); const hw = (w * c + d * s) / 2, hd = (w * s + d * c) / 2;
-    const r = this.room.rect; if (x - hw < r.x0 - margin || x + hw > r.x1 + margin || z - hd < r.z0 - margin || z + hd > r.z1 + margin) return false;
+    const r = this.room.rect; if (x - hw < r.x0 - margin || x + hw > r.x1 + margin || z - hd < r.z0 - margin || z + hd > r.z1 + margin) { this.lastWhy = 'bounds'; return false; }
     // площадь, уже занятая другой (меньшей) комнатой того же уровня — например «открытая терраса» внутри «крытой»
-    for (const b of this.blocked) if (x + hw > b.x0 + 0.05 && x - hw < b.x1 - 0.05 && z + hd > b.z0 + 0.05 && z - hd < b.z1 - 0.05) return false;
+    for (const b of this.blocked) if (x + hw > b.x0 + 0.05 && x - hw < b.x1 - 0.05 && z + hd > b.z0 + 0.05 && z - hd < b.z1 - 0.05) { this.lastWhy = 'blocked'; return false; }
     const y = this.room.y;
     for (const p of this.passages) {
       if (p.max[1] < y + 0.2 || p.min[1] > y + 2.2) continue;
-      if (x + hw > p.min[0] - 0.15 && x - hw < p.max[0] + 0.15 && z + hd > p.min[2] - 0.15 && z - hd < p.max[2] + 0.15) return false;
+      if (x + hw > p.min[0] - 0.15 && x - hw < p.max[0] + 0.15 && z + hd > p.min[2] - 0.15 && z - hd < p.max[2] + 0.15) { this.lastWhy = 'passage'; return false; }
     }
     return true;
   }
-  placed: { x: number; z: number; yaw: number; w: number; d: number; fail?: boolean; soft?: boolean }[] = [];
+  placed: { x: number; z: number; yaw: number; w: number; d: number; fail?: boolean; soft?: boolean; why?: string }[] = [];
   /** Можно ли здесь стоять человеку: в комнате, не в проёме, не в мебели, под ногами пол. */
   canStand(x: number, z: number) {
     if (!this.ok(x, z, 0.5, 0.5, 0, 0)) return false;
@@ -131,22 +132,26 @@ class Placer {
   /** soft — ковёр: может лежать под другими предметами. Предметы не пересекаются и стоят только там, где под ними есть пол. */
   put(g: BufferGeometry, x: number, z: number, yaw: number, w: number, d: number, list: BufferGeometry[] = this.matte, margin = 0.15, soft = false) {
     const c = Math.abs(Math.cos(yaw)), s = Math.abs(Math.sin(yaw)); const hw = (w * c + d * s) / 2, hd = (w * s + d * c) / 2;
-    let ok = this.ok(x, z, w, d, yaw, margin);
+    let ok = this.ok(x, z, w, d, yaw, margin); let why = ok ? '' : this.lastWhy;
     if (ok && !soft) for (const it of this.placed) {
       if (it.fail || it.soft) continue;
       const ic = Math.abs(Math.cos(it.yaw)), is = Math.abs(Math.sin(it.yaw)); const ihw = (it.w * ic + it.d * is) / 2, ihd = (it.w * is + it.d * ic) / 2;
-      if (Math.abs(it.x - x) < hw + ihw - 0.02 && Math.abs(it.z - z) < hd + ihd - 0.02) { ok = false; break; }
+      if (Math.abs(it.x - x) < hw + ihw - 0.02 && Math.abs(it.z - z) < hd + ihd - 0.02) { ok = false; why = 'overlap'; break; }
     }
     if (ok && this.support) { // пол под центром и четырьмя углами (чуть внутрь), иначе предмет висел бы в воздухе
       const y = this.room.y; const pts: [number, number][] = [[x, z], [x - hw + 0.1, z - hd + 0.1], [x + hw - 0.1, z - hd + 0.1], [x - hw + 0.1, z + hd - 0.1], [x + hw - 0.1, z + hd - 0.1]];
-      for (const [px, pz] of pts) if (!this.support(px, y, pz)) { ok = false; break; }
+      for (const [px, pz] of pts) if (!this.support(px, y, pz)) { ok = false; why = 'support'; break; }
     }
     if (ok && this.obstacle) { // в модели здесь уже что-то стоит (мебель Revit: тумбы, вазы) — не ставим поверх
       const y = this.room.y; const pts: [number, number][] = [[x, z], [x - hw + 0.1, z - hd + 0.1], [x + hw - 0.1, z - hd + 0.1], [x - hw + 0.1, z + hd - 0.1], [x + hw - 0.1, z + hd - 0.1]];
-      for (const [px, pz] of pts) if (this.obstacle(px, y, pz)) { ok = false; break; }
+      for (const [px, pz] of pts) if (this.obstacle(px, y, pz)) { ok = false; why = 'obstacle'; break; }
     }
-    if (!ok) { this.placed.push({ x, z, yaw, w, d, fail: true }); return false; }
-    list.push(F.place(g, x, this.room.y, z, yaw)); this.placed.push({ x, z, yaw, w, d, soft }); return true;
+    if (!ok) { this.placed.push({ x, z, yaw, w, d, fail: true, why }); return false; }
+    // низкий подиум модели (каменный пол санузла +20 см, ступень) — предмет встаёт на него, а не утопает: верх
+    // поверхности под центром и углами, если он не выше 45 см над полом
+    let base = this.room.y;
+    if (this.obsH && !soft) { const y = this.room.y; for (const [px, pz] of [[x, z], [x - hw + 0.1, z - hd + 0.1], [x + hw - 0.1, z - hd + 0.1], [x - hw + 0.1, z + hd - 0.1], [x + hw - 0.1, z + hd - 0.1]] as [number, number][]) { const t = this.obsH(px, y, pz); if (t !== null && t <= y + 0.45) base = Math.max(base, t); } }
+    list.push(F.place(g, x, base, z, yaw)); this.placed.push({ x, z, yaw, w, d, soft }); return true;
   }
   putAt(g: BufferGeometry, x: number, y: number, z: number, yaw: number, list: BufferGeometry[] = this.matte) { list.push(F.place(g, x, y, z, yaw)); }
   /** Перила по отрезку (x1,z1)-(x2,z2): ставятся, если под обоими концами (с отступом 0,15 м) и серединой есть пол. */
@@ -167,7 +172,7 @@ class Placer {
     for (const c of corners) {
       let bad = false;
       for (const p of this.passages) { if (p.max[1] < y + 0.2 || p.min[1] > y + 2.2) continue; const dx = Math.max(p.min[0] - c.x, 0, c.x - p.max[0]), dz = Math.max(p.min[2] - c.z, 0, c.z - p.max[2]); if (Math.hypot(dx, dz) < 1.2) { bad = true; break; } }
-      if (!bad) for (const b of this.blocked) { const dx = Math.max(b.x0 - c.x, 0, c.x - b.x1), dz = Math.max(b.z0 - c.z, 0, c.z - b.z1); if (Math.hypot(dx, dz) < 1.0) { bad = true; break; } }
+      if (!bad) for (const b of this.blocked) { const dx = Math.max(b.x0 - c.x, 0, c.x - b.x1), dz = Math.max(b.z0 - c.z, 0, c.z - b.z1); if (Math.hypot(dx, dz) < 2.5) { bad = true; break; } } // от лестниц и служебных зон — не ближе 2,5 м
       if (bad) continue;
       if (this.put(g, c.x, c.z, 0, size, size, this.matte, 0.3)) return true;
     }
@@ -189,18 +194,7 @@ const depth = (rect: Rect, side: Side) => (side === 'px' || side === 'nx' ? rect
 function furnishBedroom(p: Placer, r: RoomInfo, seed: number) {
   const order = SIDES.slice().sort((a, b) => r.glass[a] - r.glass[b] || sideLen(r.rect, b) - sideLen(r.rect, a));
   let solid: Side = order[0], bedW = 1.5, yaw = 0, w = nearWall(r.rect, solid, 1.15), placed = false;
-  // в модели уже есть низкая платформа кровати — ставим нашу кровать на неё (по её контуру), изголовьем к ближней стене
-  const lb = p.lowBox();
-  if (lb) {
-    const lw = lb.x1 - lb.x0, ld = lb.z1 - lb.z0; const L = Math.max(lw, ld), S = Math.min(lw, ld);
-    if (L >= 1.8 && L <= 2.8 && S >= 1.3 && S <= 2.4) {
-      const cx = (lb.x0 + lb.x1) / 2, cz = (lb.z0 + lb.z1) / 2; bedW = S >= 1.9 ? 1.8 : 1.5;
-      if (ld >= lw) { solid = cz - r.rect.z0 < r.rect.z1 - cz ? 'nz' : 'pz'; } else { solid = cx - r.rect.x0 < r.rect.x1 - cx ? 'nx' : 'px'; }
-      yaw = yawTo(inward(solid)); const n0 = inward(solid); w = { x: cx + n0.x * 0, z: cz, n: n0 };
-      if (p.putForce(F.bed(bedW, Math.min(2.1, L - 0.1)), cx, cz, yaw, bedW + 0.1, Math.min(2.2, L))) placed = true;
-    }
-  }
-  if (!placed)
+  // платформы кроватей Revit убраны (clearBeds) — кровать всегда у глухой стены
   for (const side of order) {
     if (r.glass[side] > 0.6 || sideLen(r.rect, side) < 2.4 || depth(r.rect, side) < 2.7) continue;
     { const wp = nearWall(r.rect, side, 0.3); if (!p.wallAt(wp.x, wp.z, wp.n)) continue; } // за изголовьем должна быть стена
@@ -305,11 +299,47 @@ function furnishKitchen(p: Placer, r: RoomInfo) {
   }
   console.info('[kitchen]', 'гарнитур не поместился', r.rect);
 }
+/** Санузел: ванна вдоль самой длинной глухой стены (если комната ≥ 2,2 × 1,9 м), умывальник с зеркалом у другой глухой
+ *  стены, унитаз у оставшейся стены ближе к углу, полотенечница и растение — в свободные места. Всё через put(): без
+ *  наложений друг на друга, не в проёмах, только там, где под ногами пол и за спиной стена. */
 function furnishBath(p: Placer, r: RoomInfo, seed: number) {
-  const solid = SIDES.slice().sort((a, b) => r.glass[a] - r.glass[b])[0];
-  const c = nearWall(r.rect, solid, 0.3, sideLen(r.rect, solid) / 2 - 0.5);
-  p.put(F.towelLadder(), c.x, c.z, yawTo(c.n), 0.5, 0.3, p.matte, 0.3);
-  p.putPlant(F.pottedPlant('kentia', seed), 0.7);
+  const order = SIDES.slice().sort((a, b) => r.glass[a] - r.glass[b] || sideLen(r.rect, b) - sideLen(r.rect, a));
+  // стена «глухая»: без стекла и с попаданием луча в стену; если луч не находит стен ни с одной стороны (контур комнаты
+  // чуть шире реальных стен), доверяем плану — иначе санузел остаётся пустым
+  const anyWall = SIDES.some((s) => { const wp = nearWall(r.rect, s, 0.3); return p.wallAt(wp.x, wp.z, wp.n); });
+  const solidWall = (s: Side, along = 0) => { if (r.glass[s] >= 0.3) return false; if (!anyWall) return true; const wp = nearWall(r.rect, s, 0.3, along); return p.wallAt(wp.x, wp.z, wp.n); };
+  // позиции вдоль стены для предмета шириной w: от торцов к центру с шагом 0,3 м
+  const alongs = (s: Side, w: number, fromEnds: boolean) => { const half = Math.max(0, sideLen(r.rect, s) / 2 - w / 2 - 0.08); const out: number[] = []; for (let a = 0; a <= half + 1e-6; a += 0.3) { out.push(a); if (a > 0) out.push(-a); } if (half > 0 && !out.includes(half)) { out.push(half, -half); } return fromEnds ? out.sort((x, y) => Math.abs(y) - Math.abs(x)) : out; };
+  const used: Side[] = []; const rest = () => [...order.filter((s) => !used.includes(s)), ...used];
+  let tub = false, van = false, wc = false;
+  // ванна — вдоль самой длинной глухой стены, в торце (освобождает стену напротив); узкий санузел 1,4 м: ванна 0,75, проход 0,6
+  for (const s of order) {
+    if (!solidWall(s) || sideLen(r.rect, s) < 1.9 || depth(r.rect, s) < 1.35) continue;
+    for (const along of alongs(s, 1.8, true)) { const w = nearWall(r.rect, s, 0.42, along); if (solidWall(s, along) && p.put(F.bathtub(1.7, 0.75), w.x, w.z, yawTo(w.n), 1.8, 0.85, p.matte, 0.1)) { tub = true; used.push(s); break; } }
+    if (tub) break;
+  }
+  // умывальник с зеркалом: сначала у другой глухой стены, при тесноте — узкий на одну чашу
+  for (const len of [1.5, 1.1, 0.7]) {
+    for (const s of rest()) {
+      if (!solidWall(s) || sideLen(r.rect, s) < len + 0.3) continue; const basins = len >= 1.3 ? 2 : 1;
+      for (const along of alongs(s, len + 0.1, false)) {
+        const w = nearWall(r.rect, s, 0.3, along);
+        if (solidWall(s, along) && p.put(F.vanity(len, basins), w.x, w.z, yawTo(w.n), len + 0.1, 0.6)) { const m = nearWall(r.rect, s, 0.03, along); p.putAt(F.mirror(Math.max(0.5, len - 0.2), 0.8), m.x, r.y + 1.1, m.z, yawTo(w.n)); van = true; used.push(s); break; }
+      }
+      if (van) break;
+    }
+    if (van) break;
+  }
+  // унитаз — у оставшейся глухой стены, ближе к углу
+  for (const s of rest()) {
+    if (!solidWall(s)) continue;
+    for (const along of alongs(s, 0.45, true)) { const w = nearWall(r.rect, s, 0.38, along); if (solidWall(s, along) && p.put(F.toilet(), w.x, w.z, yawTo(w.n), 0.45, 0.75)) { wc = true; break; } }
+    if (wc) break;
+  }
+  // полотенечница и растение — в свободные места
+  outer: for (const s of order) for (const along of alongs(s, 0.5, true)) { const w = nearWall(r.rect, s, 0.25, along); if (solidWall(s, along) && p.put(F.towelLadder(), w.x, w.z, yawTo(w.n), 0.5, 0.3, p.matte, 0.3)) break outer; }
+  p.putPlant(F.pottedPlant('kentia', seed), 0.6);
+  console.info('[bath]', r.name, `${(r.rect.x1 - r.rect.x0).toFixed(1)}×${(r.rect.z1 - r.rect.z0).toFixed(1)}`, { tub, van, wc }, anyWall ? '' : 'стен лучом не найдено', p.placed.filter((it) => it.fail).map((it) => it.why).join(','));
 }
 
 /** Места для гостей на террасах (координаты виллы): у наружного края (стоять, смотреть на вид) и на диване (сидеть). */
@@ -339,6 +369,18 @@ function furnishTerrace(p: Placer, r: RoomInfo, seed: number) {
   }
 }
 
+/** Марши: кластеры отрезков лестниц плана (ближе 1 м друг к другу) → габариты. */
+export function stairFlights(segs: Seg[]): Rect[] {
+  const used = new Uint8Array(segs.length); const out: Rect[] = [];
+  const bb = (s: Seg): Rect => ({ x0: Math.min(s[0], s[2]), z0: Math.min(s[1], s[3]), x1: Math.max(s[0], s[2]), z1: Math.max(s[1], s[3]) });
+  const near = (a: Rect, b: Rect) => a.x0 - 1 < b.x1 && b.x0 - 1 < a.x1 && a.z0 - 1 < b.z1 && b.z0 - 1 < a.z1;
+  for (let i = 0; i < segs.length; i++) {
+    if (used[i]) continue; used[i] = 1; const r = bb(segs[i]); let grown = true;
+    while (grown) { grown = false; for (let j = 0; j < segs.length; j++) { if (used[j]) continue; const q = bb(segs[j]); if (near(r, q)) { used[j] = 1; r.x0 = Math.min(r.x0, q.x0); r.z0 = Math.min(r.z0, q.z0); r.x1 = Math.max(r.x1, q.x1); r.z1 = Math.max(r.z1, q.z1); grown = true; } } }
+    out.push(r);
+  }
+  return out;
+}
 /** Прямоугольники комнат плана по предикату имени (заливкой, как при расстановке мебели) — для точных коробок санузлов. */
 export function roomRects(plan: Plan, glass: Box3[], pred: (name: string) => boolean): { rect: Rect; level: number }[] {
   const out: { rect: Rect; level: number }[] = [];
@@ -357,9 +399,9 @@ export function waterBoxes(root: Object3D): Box3[] {
   root.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.userData.role === 'water') out.push(new Box3().setFromObject(m)); });
   return out;
 }
-export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], artTexture: Texture, detail?: DetailMaps, water: Box3[] = [], support: ((x: number, y: number, z: number) => boolean) | null = null, obstacle: ((x: number, y: number, z: number) => number | null) | null = null, wallProbe: ((x: number, y: number, z: number, nx: number, nz: number) => boolean) | null = null): Group {
+export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], artTexture: Texture, detail?: DetailMaps, water: Box3[] = [], support: ((x: number, y: number, z: number) => boolean) | null = null, obstacle: ((x: number, y: number, z: number) => number | null) | null = null, wallProbe: ((x: number, y: number, z: number, nx: number, nz: number) => boolean) | null = null, topAt: ((x: number, y: number, z: number) => number | null) | null = null): Group {
   const matte: BufferGeometry[] = [], shade: BufferGeometry[] = [], art: BufferGeometry[] = [], glassParts: BufferGeometry[] = [];
-  const dbg: unknown[] = []; (window as unknown as { __rooms: unknown }).__rooms = dbg;
+  const dbg: unknown[] = []; const W = window as unknown as { __rooms: Record<string, unknown[]> }; W.__rooms = { ...(W.__rooms && !Array.isArray(W.__rooms) ? W.__rooms : {}), [plan.villa]: dbg }; // отладка: комнаты по виллам
   let seed = 1; spots = []; bboxC = [(plan.bbox[0] + plan.bbox[2]) / 2, (plan.bbox[1] + plan.bbox[3]) / 2];
   for (const l of plan.levels) {
     const kitchens = l.rooms.filter((r) => kindOf(r.name) === 'kitchen');
@@ -427,6 +469,23 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
       lp.putRail(r, x1, z1, x2, z2, yaw);
     }
     matte.push(...lp.matte); glassParts.push(...lp.glassParts);
+    // перила лестничных маршей: отрезки stairs плана группируются в марши (габарит кластера), уклон — по высоте
+    // ступеней на концах (луч сверху), ограждение ставится на стороне, где нет стены
+    for (const fl of stairFlights(l.stairs)) {
+      const lw = fl.x1 - fl.x0, ld = fl.z1 - fl.z0; const alongX = lw >= ld; const L = Math.max(lw, ld), S = Math.min(lw, ld);
+      if (L < 1.6 || S < 0.7 || S > 3.0 || !topAt) continue;
+      const cx = (fl.x0 + fl.x1) / 2, cz = (fl.z0 + fl.z1) / 2;
+      const a = alongX ? [fl.x0 + 0.3, cz] : [cx, fl.z0 + 0.3], b = alongX ? [fl.x1 - 0.3, cz] : [cx, fl.z1 - 0.3];
+      const ha = topAt(a[0], l.level, a[1]), hb = topAt(b[0], l.level, b[1]); if (ha === null || hb === null) continue;
+      const rise = hb - ha; if (Math.abs(rise) < 0.6 || Math.abs(rise) > 4.2) continue;
+      const base = Math.min(ha, hb); const yaw = alongX ? (rise >= 0 ? 0 : Math.PI) : (rise >= 0 ? -Math.PI / 2 : Math.PI / 2); // +x геометрии — в сторону подъёма
+      for (const side of [-1, 1]) {
+        const off = S / 2 + 0.05; const px = alongX ? cx : cx + side * off, pz = alongX ? cz + side * off : cz;
+        const nx = alongX ? 0 : -side, nz = alongX ? -side : 0; // нормаль от перил внутрь марша
+        if (wallProbe && wallProbe(px, base, pz, -nx, -nz)) continue; // с этой стороны стена — перила не нужны
+        matte.push(F.place(F.stairRail(L - 0.6, Math.abs(rise)), px, base, pz, yaw));
+      }
+    }
   }
   const g = new Group(); g.name = 'furniture';
   const mk = (parts: BufferGeometry[], mat: MeshStandardMaterial, name: string) => { if (!parts.length) return; const m = new Mesh(F.merge(parts), mat); m.name = name; m.castShadow = true; m.receiveShadow = true; m.userData.role = 'furniture'; g.add(m); };
@@ -444,7 +503,7 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
 
 /** Отладка (dev, ?plandebug): план каждого уровня с прямоугольниками комнат, стеклом, проёмами и следами мебели → app/captures/. */
 export async function debugPlanImage(villaId: string, plan: Plan, glass: Box3[], passages: Passage[]) {
-  const dbg = (window as unknown as { __rooms: { level: number; rect: number[]; walls: number[]; name: string; items: { x: number; z: number; yaw: number; w: number; d: number; fail?: boolean }[] }[] }).__rooms ?? [];
+  const dbg = (window as unknown as { __rooms?: Record<string, { level: number; rect: number[]; walls: number[]; name: string; items: { x: number; z: number; yaw: number; w: number; d: number; fail?: boolean }[] }[]> }).__rooms?.[villaId] ?? [];
   const [bx0, bz0, bx1, bz1] = plan.bbox; const S = 40; const W = Math.ceil((bx1 - bx0 + 2) * S), H = Math.ceil((bz1 - bz0 + 2) * S);
   const X = (x: number) => (x - bx0 + 1) * S, Z = (z: number) => (z - bz0 + 1) * S;
   for (const l of plan.levels) {

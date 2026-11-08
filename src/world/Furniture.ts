@@ -158,6 +158,14 @@ export function railing(len = 2.0): { frame: BufferGeometry; glass: BufferGeomet
   const glass = new BoxGeometry(len - 0.08, 0.86, 0.012); glass.translate(0, 0.12 + 0.43, 0);
   return { frame: merge(p), glass };
 }
+/** Перила лестничного марша: длина по горизонтали len, подъём rise; стойки вертикальные, поручень по уклону. Вдоль +x, центр 0. */
+export function stairRail(len = 3.0, rise = 1.5): BufferGeometry {
+  const p: BufferGeometry[] = []; const n = Math.max(2, Math.round(len / 1.1)); const slope = rise / len;
+  for (let i = 0; i <= n; i++) { const x = -len / 2 + (len / n) * i; const y0 = slope * (x + len / 2); p.push(box(0.04, 0.95, 0.04, '#b9bcbf', x, y0, 0, 0.01)); }
+  const L = Math.hypot(len, rise); const rail = new BoxGeometry(L + 0.06, 0.05, 0.07); rail.rotateZ(Math.atan2(rise, len)); rail.translate(0, rise / 2 + 0.95, 0); p.push(col(rail, C.walnut, 0.03));
+  const low = new BoxGeometry(L, 0.02, 0.03); low.rotateZ(Math.atan2(rise, len)); low.translate(0, rise / 2 + 0.1, 0); p.push(col(low, '#b9bcbf', 0.01));
+  return merge(p);
+}
 /** Кухонный гарнитур вдоль стены: нижние шкафы (тик) с цоколем и фасадами, столешница из камня, мойка с краном,
  *  варочная панель. Длина len, глубина 0,6, лицом на +z (стена за спиной, −z). */
 export function kitchenBase(len = 3.0): BufferGeometry {
@@ -206,6 +214,35 @@ export function bathtub(l = 1.7, w = 0.8): BufferGeometry {
   const bottom = new ExtrudeGeometry(rr(0, 0, l - 0.14, w - 0.14, 0.28), { depth: 0.1, bevelEnabled: false, curveSegments: 10 }); bottom.rotateX(-Math.PI / 2); bottom.translate(0, 0.0, 0);
   const tap = new CylinderGeometry(0.012, 0.012, 0.25, 8); tap.translate(0, 0.68, -w / 2 + 0.06); const spout = new BoxGeometry(0.02, 0.02, 0.16); spout.translate(0, 0.8, -w / 2 + 0.14);
   return merge([col(wall, '#f7f6f2'), col(bottom, '#f2f1ed'), col(tap, '#c9c9c4'), col(spout, '#c9c9c4')]);
+}
+/** Тумба умывальника: ореховый корпус на ножках, каменная столешница, 1–2 накладные белые чаши со смесителями, полотенца. Спинка к −z. */
+export function vanity(len = 1.4, basins = 2): BufferGeometry {
+  const p: BufferGeometry[] = [];
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(0.02, 0.02, 0.22, C.charcoal, sx * (len / 2 - 0.06), 0, 0.25 + sz * 0.2, 6));
+  p.push(box(len, 0.5, 0.5, C.walnut, 0, 0.22, 0.25)); p.push(box(len - 0.08, 0.03, 0.44, C.walnut, 0, 0.15, 0.25, 0.02)); // корпус и полка под ним
+  for (let i = 0; i < Math.max(1, Math.round(len / 0.5)); i++) p.push(box(0.14, 0.012, 0.02, C.brass, -len / 2 + (i + 0.5) * (len / Math.max(1, Math.round(len / 0.5))), 0.5, 0.505)); // ручки
+  p.push(box(len + 0.04, 0.05, 0.55, C.stone, 0, 0.72, 0.255, 0.02));
+  const xs = basins >= 2 ? [-len / 4, len / 4] : [0];
+  for (const x of xs) {
+    const bowl = new LatheGeometry([new Vector2(0, 0), new Vector2(0.16, 0.01), new Vector2(0.21, 0.08), new Vector2(0.2, 0.13), new Vector2(0.17, 0.13), new Vector2(0.15, 0.04), new Vector2(0, 0.03)], 18); bowl.translate(x, 0.77, 0.27); p.push(col(bowl, C.white, 0.01));
+    p.push(cyl(0.012, 0.014, 0.26, '#c9c9c4', x, 0.77, 0.05, 8)); const sp = new BoxGeometry(0.02, 0.02, 0.14); sp.translate(x, 1.02, 0.12); p.push(col(sp, '#c9c9c4'));
+  }
+  p.push(box(0.28, 0.06, 0.2, C.white, len / 2 - 0.2, 0.16, 0.25, 0.01)); p.push(box(0.26, 0.05, 0.18, C.sand, len / 2 - 0.2, 0.22, 0.25, 0.02)); // стопка полотенец на полке
+  return merge(p);
+}
+/** Зеркало в тиковой раме, низ на y=0, плоскость к +z (вешается на стену). */
+export function mirror(w = 1.0, h = 0.8): BufferGeometry {
+  return merge([box(w, h, 0.03, C.teak, 0, 0, 0), box(w - 0.06, h - 0.06, 0.012, '#cfd9db', 0, 0.03, 0.025, 0.0)]);
+}
+/** Унитаз: напольный, бачок у стены (−z), чаша и крышка к +z. Габарит 0,45 × 0,72. */
+export function toilet(): BufferGeometry {
+  const p: BufferGeometry[] = [];
+  p.push(box(0.36, 0.36, 0.3, C.white, 0, 0, -0.05, 0.01)); // пьедестал
+  const bowl = new LatheGeometry([new Vector2(0, 0.1), new Vector2(0.16, 0.12), new Vector2(0.2, 0.3), new Vector2(0.2, 0.4), new Vector2(0, 0.4)], 18); bowl.translate(0, 0, 0.14); p.push(col(bowl, C.white, 0.01));
+  const seat = new CylinderGeometry(0.21, 0.21, 0.03, 18); seat.translate(0, 0.415, 0.14); p.push(col(seat, '#f8f7f4', 0.0));
+  p.push(box(0.4, 0.42, 0.17, C.white, 0, 0.38, -0.26, 0.01)); p.push(box(0.42, 0.03, 0.19, C.white, 0, 0.8, -0.26, 0.0)); // бачок и крышка
+  p.push(cyl(0.012, 0.012, 0.03, '#c9c9c4', 0.12, 0.83, -0.26, 8));
+  return merge(p);
 }
 export function towelLadder(): BufferGeometry {
   const p: BufferGeometry[] = [];
