@@ -76,6 +76,28 @@ export function buildPathNetwork(houses: HouseLite[], entrance: [number, number]
     lines.push(route.via ? [route.q.q.clone(), route.via, P] : [route.q.q.clone(), P]);
     console.info('[entry]', +e.x.toFixed(1), +e.z.toFixed(1), route.via ? 'тропинка в обход дома' : 'тропинка', +route.len.toFixed(1), 'м');
   }
+  // дорожки не заходят в дома: линия обрезается за 1 м до входа в габарит любого дома (+0,3 м)
+  const segCrosses = (A: Vector3, B: Vector3) => { const n = Math.max(1, Math.ceil(A.distanceTo(B) / 0.25)); for (let k = 1; k < n; k++) { const tt = k / n; const x = A.x + (B.x - A.x) * tt, z = A.z + (B.z - A.z) * tt; const hh = invAll.find((h2) => insideFp(x, z, h2, -0.9)); if (hh) return { hh, x, z }; } return null; };
+  for (let li = 0; li < lines.length; li++) {
+    const l = lines[li]; const out: Vector3[] = [l[0]]; let cut = false;
+    for (let si = 0; si < l.length - 1 && !cut; si++) {
+      const a = out[out.length - 1], b = l[si + 1]; const hit = segCrosses(a, b);
+      if (!hit) { out.push(b); continue; }
+      // отрезок входит в дом: обход через угол его габарита (+1 м), если оба плеча свободны; иначе — обрезаем за 1 м до дома
+      let routed = false;
+      if (hit.hh.fp) {
+        const fwd = hit.hh.m.clone().invert(); const [fx0, fz0, fx1, fz1] = hit.hh.fp; let best: { w: Vector3; len: number } | null = null;
+        for (const [cx, cz] of [[fx0 - 0.2, fz0 - 0.2], [fx1 + 0.2, fz0 - 0.2], [fx1 + 0.2, fz1 + 0.2], [fx0 - 0.2, fz1 + 0.2]]) {
+          const w = new Vector3(cx, 0, cz).applyMatrix4(fwd); w.y = 0; if (segCrosses(a, w) || segCrosses(w, b)) continue;
+          const len = a.distanceTo(w) + w.distanceTo(b); if (!best || len < best.len) best = { w, len };
+        }
+        if (best) { out.push(best.w, b); routed = true; console.info('[path]', 'линия', li, 'обходит дом через угол', [+best.w.x.toFixed(1), +best.w.z.toFixed(1)]); }
+      }
+      if (!routed) { const d = a.distanceTo(b) || 1; const tb = Math.max(0, (Math.hypot(hit.x - a.x, hit.z - a.z) - 1) / d); out.push(new Vector3(a.x + (b.x - a.x) * tb, 0, a.z + (b.z - a.z) * tb)); cut = true; console.info('[path]', 'линия', li, 'обрезана у дома в', [+hit.x.toFixed(1), +hit.z.toFixed(1)]); }
+    }
+    lines[li] = out;
+  }
+  for (let li = lines.length - 1; li >= 0; li--) { const l = lines[li]; let L = 0; for (let i = 1; i < l.length; i++) L += l[i].distanceTo(l[i - 1]); if (l.length < 2 || L < 2) lines.splice(li, 1); }
   const nodes: Vector3[] = []; for (const l of lines) for (const p of l) if (!nodes.some((n) => n.distanceTo(p) < 0.5)) nodes.push(p.clone());
   return { lines, nodes };
 }

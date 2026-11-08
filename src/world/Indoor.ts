@@ -10,7 +10,7 @@ import type { Plan } from '../plan';
 export type IndoorMask = { data: Uint8Array; floor: Float32Array; green: Uint8Array; greenFloor: Float32Array; x0: number; z0: number; step: number; nx: number; nz: number }; // green: посадки внутри пятна — газон на отметке своего уровня
 const STEP = 0.1, GROW = 0.5;
 
-export function buildIndoor(plan: Plan, glass: Box3[]): IndoorMask {
+export function buildIndoor(plan: Plan, glass: Box3[], greenRects: { rect: { x0: number; z0: number; x1: number; z1: number }; level: number }[] = []): IndoorMask {
   const [bx0, bz0, bx1, bz1] = plan.bbox; const x0 = bx0 - 1.5, z0 = bz0 - 1.5;
   const nx = Math.ceil((bx1 + 1.5 - x0) / STEP) + 1, nz = Math.ceil((bz1 + 1.5 - z0) / STEP) + 1; const N = nx * nz;
   const data = new Uint8Array(N), floor = new Float32Array(N).fill(Infinity), green = new Uint8Array(N), greenFloor = new Float32Array(N).fill(Infinity);
@@ -35,8 +35,8 @@ export function buildIndoor(plan: Plan, glass: Box3[]): IndoorMask {
     for (let qi = 0; qi < q.length; qi++) { const k = q[qi]; if (!reached[k]) continue; const i = k % nx; for (const n of [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, k - nx, k + nx]) { if (n < 0 || n >= N || reached[n] || big[n]) continue; reached[n] = 1; q.push(n); } }
     const inside = new Uint8Array(N); for (let k = 0; k < N; k++) inside[k] = reached[k] ? 0 : 1;
     const lvl = erode(inside);
-    // зелёные зоны внутри пятна — не интерьер (газон на отметке пола)
-    for (const r of l.rooms) if (/green/i.test(r.name) && r.area) { const hh = Math.sqrt(r.area) / 2 * 1.05; const i0 = Math.max(0, Math.floor((r.x - hh - x0) / STEP)), i1 = Math.min(nx - 1, Math.ceil((r.x + hh - x0) / STEP)), j0 = Math.max(0, Math.floor((r.z - hh - z0) / STEP)), j1 = Math.min(nz - 1, Math.ceil((r.z + hh - z0) / STEP)); for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { lvl[j * nx + i] = 0; green[j * nx + i] = 1; greenFloor[j * nx + i] = Math.min(greenFloor[j * nx + i], l.level); } }
+    // зелёные зоны внутри пятна — не интерьер (газон на отметке пола); контур — заливкой по плану, как у комнат
+    for (const gz of greenRects) { if (gz.level !== l.level) continue; const rr = gz.rect; const i0 = Math.max(0, Math.floor((rr.x0 - x0) / STEP)), i1 = Math.min(nx - 1, Math.ceil((rr.x1 - x0) / STEP)), j0 = Math.max(0, Math.floor((rr.z0 - z0) / STEP)), j1 = Math.min(nz - 1, Math.ceil((rr.z1 - z0) / STEP)); for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { lvl[j * nx + i] = 0; green[j * nx + i] = 1; greenFloor[j * nx + i] = Math.min(greenFloor[j * nx + i], l.level); } }
     for (let k = 0; k < N; k++) if (lvl[k]) { data[k] = 1; floor[k] = Math.min(floor[k], l.level); }
   }
   return { data, floor, green, greenFloor, x0, z0, step: STEP, nx, nz };

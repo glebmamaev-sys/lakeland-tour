@@ -331,9 +331,9 @@ export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number
   return best?.rect ?? null;
 }
 
-export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shrubs = [], lagoon = [120, 0], idlers = [], terraceSpots = [], water }: {
+export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shrubs = [], lagoon = [120, 0], idlers = [], terraceSpots = [], water, stepAt }: {
   net: PathNet; heightAt: (x: number, z: number) => number | null; houses: HouseLite[]; pools: Box3[]; inSite: (x: number, z: number) => boolean; audioBase?: string;
-  shrubs?: { x: number; y: number; z: number }[]; lagoon?: [number, number]; idlers?: IdlerSpec[]; terraceSpots?: TerraceSpotW[]; water?: (x: number, z: number) => boolean;
+  shrubs?: { x: number; y: number; z: number }[]; lagoon?: [number, number]; idlers?: IdlerSpec[]; terraceSpots?: TerraceSpotW[]; water?: (x: number, z: number) => boolean; stepAt?: (x: number, z: number) => number | null;
 }) {
   const root = useRef<Group>(null);
   const chars = useGLTF(CHAR_IDS.map((id) => `${audioBase}models/chars/${id}.glb`)) as unknown as CharGltf[];
@@ -353,14 +353,8 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     const big = pools.filter((b) => { const s = b.getSize(tmp2); return Math.max(s.x, s.z) >= 5 && Math.min(s.x, s.z) >= 2.2; })
       .sort((p, q) => q.getSize(tmp2).lengthSq() - p.getSize(tmp).lengthSq());
     const swimmers: Swimmer[] = [];
-    big.slice(0, 4).forEach((b, i) => {
-      const s = b.getSize(tmp2); const along = s.x >= s.z ? 'x' : 'z';
-      const count = i === 0 ? 2 : 1;
-      for (let k = 0; k < count; k++) {
-        const h = makeHuman({ seed: 300 + i * 3 + k, swimwear: true });
-        swimmers.push({ h, box: b, along, dir: k ? -1 : 1, pos: 0.2 + r() * 0.6, speed: 0.7 + r() * 0.3, y: b.max.y - 0.05 });
-      }
-    });
+    // пловцов нет: у скелетных моделей нет клипа плавания, а процедурные фигуры заказчик просил убрать
+    void big;
     // садовник с косилкой на самом ровном газоне
     const lawn = findLawn(houses, net, heightAt, inSite, 3, water);
     let gardener: Gardener | null = null;
@@ -384,12 +378,12 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
       const order = along === 'x' ? [[0, c.z >= hp.z ? 1 : -1], [0, c.z >= hp.z ? -1 : 1], [1, 0], [-1, 0]] : [[c.x >= hp.x ? 1 : -1, 0], [c.x >= hp.x ? -1 : 1, 0], [0, 1], [0, -1]];
       for (const [sx, sz] of order) for (const off of [1.4, 2.2]) sides.push(mk(sx, sz, off));
       const flat = (x: number, z: number) => { const ys = [[-0.5, -0.8], [0.5, -0.8], [-0.5, 0.8], [0.5, 0.8]].map(([dx, dz]) => heightAt(x + dx, z + dz)); if (ys.some((y) => y === null)) return false; const v = ys as number[]; return Math.max(...v) - Math.min(...v) < 0.3 && Math.abs((v[0] + v[3]) / 2 - b.max.y) < 1.6; };
-      const pick = sides.find((pair) => pair.every((p) => distToHouses(houses, p.x, p.z) > 0.6 && flat(p.x, p.z) && inSite(p.x, p.z)));
+      const pick = sides.find((pair) => pair.every((p) => distToHouses(houses, p.x, p.z) > 0.6 && flat(p.x, p.z) && inSite(p.x, p.z) && shrubs.every((sh) => Math.hypot(sh.x - p.x, sh.z - p.z) > 1.5)));
       if (!pick) return;
       pick.forEach((p, k) => {
         const y = (heightAt(p.x, p.z) ?? b.max.y) + 0.02;
         const lounger = new Mesh(F.lounger(), MAT); lounger.castShadow = true; lounger.position.set(p.x, y, p.z); lounger.rotation.y = p.yaw;
-        const h = makeHuman({ seed: 700 + i * 2 + k, swimwear: true });
+        const gid: CharId = k ? 'f_casual' : 'm_beach'; const h = makeSkinnedHuman(charOf(gid), gid.startsWith('f_'), 700 + i * 2 + k); // лежат скелетные модели (Idle — дыхание), корень повёрнут горизонтально
         sunbathers.push({ h, lounger, x: p.x, y, z: p.z, yaw: p.yaw });
       });
     });
@@ -490,7 +484,8 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
       const e2 = graph.edges[w.edge]; const a2 = graph.nodes[w.from], b2 = graph.nodes[w.from === e2.a ? e2.b : e2.a];
       const yaw = Math.atan2(b2.x - a2.x, b2.z - a2.z); let dy = yaw - w.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); w.yaw += dy * Math.min(1, d * 6);
       const x = a2.x + (b2.x - a2.x) * w.t + Math.cos(yaw) * w.side, z = a2.z + (b2.z - a2.z) * w.t - Math.sin(yaw) * w.side;
-      const y = heightAt(x, z); w.h.root.position.set(x, (y ?? w.h.root.position.y) + 0.02, z); w.h.root.rotation.y = w.yaw;
+      let y = heightAt(x, z); const st = stepAt?.(x, z); if (st !== null && st !== undefined && (y === null || st > y)) y = st; // на лестнице — по верху ступени, а не по пандусу под ней
+      w.h.root.position.set(x, (y ?? w.h.root.position.y) + 0.02, z); w.h.root.rotation.y = w.yaw;
     }
     for (const s of state.swimmers) {
       const b = s.box; const len = (s.along === 'x' ? b.max.x - b.min.x : b.max.z - b.min.z) - 2.6; // запас на длину тела
@@ -522,8 +517,8 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     }
     for (const s of state.sunbathers) {
       // origin — ступни; после поворота тело уходит в −z локально: ставим ступни у ножного края шезлонга
-      s.h.root.position.set(s.x + Math.sin(s.yaw) * 0.72, s.y + 0.42, s.z + Math.cos(s.yaw) * 0.72); s.h.root.rotation.y = s.yaw; // ступни у ножного края, голова к спинке
-      animate(s.h, 'lie', t + s.h.opts.seed!);
+      animate(s.h, 'idle', t + s.h.opts.seed!);
+      s.h.root.position.set(s.x + Math.sin(s.yaw) * 0.72, s.y + 0.44, s.z + Math.cos(s.yaw) * 0.72); s.h.root.rotation.y = s.yaw; s.h.root.rotation.x = -Math.PI / 2 + 0.12; // лежит лицом вверх, чуть приподнят к спинке
     }
     const wt = state.waterer;
     if (wt) {
@@ -559,7 +554,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
       const flap = Math.sin(t * 7 + b.ph) * 0.6; b.wl.rotation.z = -flap; b.wr.rotation.z = flap;
     }
     // скелетные персонажи: шаг микшеров
-    for (const h of [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h)]) h.skin?.mixer.update(d);
+    for (const h of [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h), ...state.sunbathers.map((s) => s.h)]) h.skin?.mixer.update(d);
     for (const st of state.standing) if (st.anim === 'sit') applySit(st.h); // поза «сидит» поверх клипа
     // игрок не проходит сквозь людей: мягкий толчок наружу
     if (P) {

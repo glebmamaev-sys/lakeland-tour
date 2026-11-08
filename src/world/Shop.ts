@@ -129,9 +129,9 @@ export function buildShop(W: number, D: number, tex: ShopTextures, groundDrop = 
     if (door) matte.push(box(b - a - 0.12, 0.05, 0.12, C.walnut, (a + b) / 2, y0 - 0.05, hd - 0.06, 0.02)); // перемычка над дверью
   }
   // внутренний цвет стен (светлая штукатурка) — накладка на задней стене; кровля с выносом, фасция, потолок
-  matte.push(box(W + 1.6, 0.3, D + 2.2, '#f1ece2', 0, WALL_H, 0.3, 0.02));
-  matte.push(box(W + 1.6, 0.6, 0.06, C.walnut, 0, WALL_H - 0.3, hd + 1.37, 0.02));   // фасция спереди (рейка)
-  for (let x = -hw - 0.6; x <= hw + 0.6; x += 0.3) matte.push(box(0.06, 0.1, 1.3, C.walnut, x, WALL_H - 0.1, hd + 0.7, 0.03)); // рейки навеса
+  matte.push(box(W + 1.6, 0.3, D + 2.2, '#f1ece2', 0, WALL_H + 0.02, 0.3, 0.02)); // плита на 2 см выше верха стен — без совпадающих плоскостей (мерцание)
+  matte.push(box(W + 1.64, 0.6, 0.06, C.walnut, 0, WALL_H - 0.3, hd + 1.44, 0.02));   // фасция спереди (рейка) — выступает за торец плиты на 4 см
+  for (let x = -hw - 0.6; x <= hw + 0.6; x += 0.3) matte.push(box(0.06, 0.1, 1.3, C.walnut, x, WALL_H - 0.12, hd + 0.7, 0.03)); // рейки навеса (верх на 2 см ниже плиты)
   // вывеска над входом
   const sign = new BoxGeometry(3.4, 0.7, 0.1).translate(0, WALL_H - 0.75, hd + 1.42); art.push(sign);
   // ступень у входа

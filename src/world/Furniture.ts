@@ -149,6 +149,46 @@ export function chair(): BufferGeometry {
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(box(0.035, 0.44, 0.035, C.walnut, sx * 0.2, 0, sz * 0.2));
   return merge(p);
 }
+/** Кухонный гарнитур вдоль стены: нижние шкафы (тик) с цоколем и фасадами, столешница из камня, мойка с краном,
+ *  варочная панель. Длина len, глубина 0,6, лицом на +z (стена за спиной, −z). */
+export function kitchenBase(len = 3.0): BufferGeometry {
+  const p: BufferGeometry[] = [];
+  p.push(box(len - 0.06, 0.1, 0.52, C.charcoal, 0, 0, -0.02, 0.02));                  // цоколь
+  p.push(box(len, 0.78, 0.58, C.teak, 0, 0.1, 0, 0.03));                                // корпус
+  const nDoors = Math.max(2, Math.round(len / 0.6)); const dw = len / nDoors;
+  for (let i = 0; i < nDoors; i++) { const x = -len / 2 + dw * (i + 0.5); p.push(box(dw - 0.03, 0.74, 0.02, C.teak, x, 0.12, 0.29, 0.05)); p.push(box(0.14, 0.015, 0.02, C.brass, x, 0.78, 0.31, 0.02)); } // фасады и ручки
+  p.push(box(len + 0.04, 0.04, 0.64, C.stone, 0, 0.88, 0.02, 0.02));                     // столешница
+  // мойка у левой трети, варочная панель у правой
+  const sx = -len / 4, cx = len / 4;
+  p.push(box(0.52, 0.015, 0.4, '#b9b9b4', sx, 0.915, 0.0, 0.02)); p.push(box(0.46, 0.012, 0.34, '#8c8c88', sx, 0.918, 0.0, 0.02)); // мойка
+  p.push(cyl(0.012, 0.012, 0.3, '#cfcfca', sx, 0.92, -0.2, 8)); const spout = new BoxGeometry(0.02, 0.02, 0.2); spout.translate(sx, 1.22, -0.1); p.push(col(spout, '#cfcfca')); // кран
+  p.push(box(0.6, 0.012, 0.5, '#2a2927', cx, 0.92, 0.0, 0.01)); for (const [dx, dz] of [[-0.14, -0.12], [0.14, -0.12], [-0.14, 0.12], [0.14, 0.12]]) p.push(cyl(0.08, 0.08, 0.004, '#4a4a48', cx + dx, 0.932, dz, 14)); // варочная панель
+  p.push(box(0.3, 0.03, 0.2, C.walnut, -len / 2 + 0.3, 0.92, 0.1, 0.03)); p.push(cyl(0.05, 0.04, 0.22, C.terracotta, len / 2 - 0.25, 0.92, -0.1, 10)); // доска и кувшин
+  return merge(p);
+}
+/** Верхние шкафы: глубина 0,35, низ на 1,5 м, фасады с ручками. */
+export function kitchenUpper(len = 3.0): BufferGeometry {
+  const p: BufferGeometry[] = [];
+  p.push(box(len, 0.7, 0.34, C.teak, 0, 1.5, -0.13, 0.03));
+  const n = Math.max(2, Math.round(len / 0.6)); const dw = len / n;
+  for (let i = 0; i < n; i++) { const x = -len / 2 + dw * (i + 0.5); p.push(box(dw - 0.03, 0.66, 0.02, C.linen, x, 1.52, 0.05, 0.04)); p.push(box(0.12, 0.015, 0.02, C.brass, x, 1.56, 0.07, 0.02)); }
+  return merge(p);
+}
+/** Холодильник: стальной серый, две двери, ручки. */
+export function fridge(): BufferGeometry {
+  const p: BufferGeometry[] = [];
+  p.push(box(0.7, 1.9, 0.66, '#9ea3a6', 0, 0, 0, 0.02)); p.push(box(0.68, 0.86, 0.02, '#aab0b3', 0, 0.06, 0.34, 0.02)); p.push(box(0.68, 0.96, 0.02, '#aab0b3', 0, 0.94, 0.34, 0.02));
+  p.push(box(0.02, 0.6, 0.02, '#e6e6e3', -0.25, 0.3, 0.36, 0.01)); p.push(box(0.02, 0.7, 0.02, '#e6e6e3', -0.25, 1.1, 0.36, 0.01));
+  return merge(p);
+}
+/** Кухонный остров со столешницей и двумя барными табуретами (ротанг на чёрных ножках). */
+export function island(len = 2.0): BufferGeometry {
+  const p: BufferGeometry[] = [];
+  p.push(box(len, 0.86, 0.86, C.teak, 0, 0, 0, 0.03)); p.push(box(len + 0.08, 0.05, 0.94, C.stone, 0, 0.86, 0, 0.02));
+  for (const s of [-1, 1]) { const x = s * Math.min(0.45, len / 4); for (const [lx, lz] of [[-0.14, -0.14], [0.14, -0.14], [-0.14, 0.14], [0.14, 0.14]]) p.push(cyl(0.012, 0.012, 0.66, C.charcoal, x + lx, 0, 0.72 + lz, 6)); p.push(cyl(0.18, 0.18, 0.05, C.rattan, x, 0.66, 0.72, 14)); }
+  p.push(box(0.4, 0.04, 0.3, C.walnut, len / 2 - 0.4, 0.91, 0.05, 0.03)); for (let i = 0; i < 4; i++) p.push(cyl(0.045, 0.045, 0.08, i % 2 ? '#e9b949' : '#c9552f', len / 2 - 0.5 + (i % 2) * 0.12, 0.95, 0.0 + Math.floor(i / 2) * 0.12, 8)); // доска с фруктами
+  return merge(p);
+}
 /** Отдельно стоящая ванна: скруглённый овальный борт, чаша внутри, белый акрил. Длина l, ширина w, высота 0,56. */
 export function bathtub(l = 1.7, w = 0.8): BufferGeometry {
   const rr = (x: number, z: number, lw: number, ww: number, r: number) => { const s = new Shape(); s.moveTo(x - lw / 2 + r, z - ww / 2); s.lineTo(x + lw / 2 - r, z - ww / 2); s.quadraticCurveTo(x + lw / 2, z - ww / 2, x + lw / 2, z - ww / 2 + r); s.lineTo(x + lw / 2, z + ww / 2 - r); s.quadraticCurveTo(x + lw / 2, z + ww / 2, x + lw / 2 - r, z + ww / 2); s.lineTo(x - lw / 2 + r, z + ww / 2); s.quadraticCurveTo(x - lw / 2, z + ww / 2, x - lw / 2, z + ww / 2 - r); s.lineTo(x - lw / 2, z - ww / 2 + r); s.quadraticCurveTo(x - lw / 2, z - ww / 2, x - lw / 2 + r, z - ww / 2); return s; };

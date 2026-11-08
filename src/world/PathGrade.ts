@@ -8,7 +8,7 @@ import { BufferGeometry, CatmullRomCurve3, Float32BufferAttribute } from 'three'
 import type { PathNet } from './Paths';
 import { hexa, finish, type Grid, type Tri } from './Terraces';
 
-export type Step = { x: number; z: number; dir: [number, number]; len: number; width: number; top: number; base: number };
+export type Step = { x: number; z: number; dir: [number, number]; len: number; width: number; top: number; base: number; c: [number, number][] }; // c — 4 угла проступи по кривой (лев/прав в начале, прав/лев в конце)
 export type Graded = { fixed: Uint8Array; h: Float32Array; steps: Step[]; flights: number; corridor: Uint8Array; ribbons: BufferGeometry[] };
 
 const DS = 0.5, SLOPE_WALK = 0.12, SLOPE_MAX = 0.5, RISER = 0.15, HALF = 1.5, LIFT = -0.06, SMOOTH = 1.5;
@@ -31,6 +31,7 @@ export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6
     for (let i = 1; i <= n; i++) gp[i] = Math.max(gp[i - 1] - SLOPE_MAX * ds, Math.min(gp[i - 1] + SLOPE_MAX * ds, gp[i]));
     for (let i = n - 1; i >= 0; i--) gp[i] = Math.max(gp[i + 1] - SLOPE_MAX * ds, Math.min(gp[i + 1] + SLOPE_MAX * ds, gp[i]));
     // лестничные марши: подряд идущие участки круче SLOPE_WALK одного знака
+    const flightsS: [number, number][] = []; // диапазоны маршей по длине (м) — лента дорожки там не рисуется
     let i = 1;
     while (i <= n) {
       const sl = (gp[i] - gp[i - 1]) / ds;
@@ -39,22 +40,28 @@ export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6
       while (j <= n && Math.sign(gp[j] - gp[j - 1]) === sign && Math.abs(gp[j] - gp[j - 1]) / ds > SLOPE_WALK) j++;
       const a = i - 1, b = j - 1; const dh = gp[b] - gp[a], len = (b - a) * ds;
       if (Math.abs(dh) >= 0.3 && len >= 0.9) {
-        const ns = Math.max(2, Math.round(Math.abs(dh) / RISER)); const tread = len / ns, riser = dh / ns; flights++;
+        const ns = Math.max(2, Math.round(Math.abs(dh) / RISER)); const tread = len / ns, riser = dh / ns; flights++; flightsS.push([a * ds, b * ds]);
+        const side = (s0: number) => { const u = Math.min(1, s0 / L); const p = curve.getPointAt(u), tg = curve.getTangentAt(u); const dl = Math.hypot(tg.x, tg.z) || 1; const nx0 = -tg.z / dl, nz0 = tg.x / dl; const w2 = (width + 0.4) / 2; return { p, t: [tg.x / dl, tg.z / dl] as [number, number], L: [p.x - nx0 * w2, p.z - nz0 * w2] as [number, number], R: [p.x + nx0 * w2, p.z + nz0 * w2] as [number, number] }; };
         for (let k = 0; k < ns; k++) {
-          const sm = a * ds + (k + 0.5) * tread; const p = curve.getPointAt(Math.min(1, sm / L)), tg = curve.getTangentAt(Math.min(1, sm / L));
-          const dl = Math.hypot(tg.x, tg.z) || 1; const top = dh > 0 ? gp[a] + (k + 1) * riser : gp[a] + k * riser; // верх ступени — её высокий край
-          steps.push({ x: p.x, z: p.z, dir: [tg.x / dl, tg.z / dl], len: tread, width: width + 0.4, top, base: top - Math.abs(riser) - 0.3 });
+          const sA = a * ds + k * tread, sB = sA + tread; const A = side(sA), B = side(sB);
+          const gA = gp[a] + k * riser, gB = gp[a] + (k + 1) * riser; const top = Math.max(gA, gB) + 0.1; // верх ступени — высокий край, вровень с лентой дорожки на концах марша
+          steps.push({ x: (A.p.x + B.p.x) / 2, z: (A.p.z + B.p.z) / 2, dir: B.t, len: tread, width: width + 0.4, top, base: Math.min(gA, gB) - 0.35, c: [A.L, A.R, B.R, B.L] });
         }
       }
       i = Math.max(j, i + 1);
     }
     // лента дорожки по своему профилю: ровная поперёк (без крена на косогоре), на +10 см над профилем
     { const P: number[] = [], U: number[] = [], Nn: number[] = [], idx: number[] = []; let v = 0;
+      let prevIdx = -1; // индекс предыдущей добавленной пары вершин (лента рвётся на маршах — там ступени)
       for (let s = 0; s <= n; s++) {
-        const p = pts[s]; const tg = curve.getTangentAt(Math.min(1, (s * ds) / L)); const tl = Math.hypot(tg.x, tg.z) || 1; const sx = (-tg.z / tl) * width / 2, sz = (tg.x / tl) * width / 2;
+        const sm = s * ds; const inFlight = flightsS.some(([f0, f1]) => sm > f0 + 0.01 && sm < f1 - 0.01);
+        if (inFlight) { prevIdx = -1; continue; }
+        const p = pts[s]; const tg = curve.getTangentAt(Math.min(1, sm / L)); const tl = Math.hypot(tg.x, tg.z) || 1; const sx = (-tg.z / tl) * width / 2, sz = (tg.x / tl) * width / 2;
         if (s) v += ds / width;
+        const cur = P.length / 3;
         P.push(p.x - sx, gp[s] + 0.1, p.z - sz, p.x + sx, gp[s] + 0.1, p.z + sz); U.push(0, v, 1, v); Nn.push(0, 1, 0, 0, 1, 0);
-        if (s) { const a = (s - 1) * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+        if (prevIdx >= 0) idx.push(prevIdx, prevIdx + 1, cur, prevIdx + 1, cur + 1, cur);
+        prevIdx = cur;
       }
       const rg = new BufferGeometry(); rg.setAttribute('position', new Float32BufferAttribute(P, 3)); rg.setAttribute('uv', new Float32BufferAttribute(U, 2)); rg.setAttribute('normal', new Float32BufferAttribute(Nn, 3)); rg.setIndex(idx); ribbons.push(rg); }
     // коридор: каждой клетке — отметка ближайшей точки оси
@@ -77,9 +84,8 @@ export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6
 export function stepGeometry(steps: Step[]): BufferGeometry | null {
   const T: Tri = { P: [], U: [] };
   for (const s of steps) {
-    const [dx, dz] = s.dir; const lx = -dz, lz = dx; const w2 = s.width / 2, l2 = s.len / 2;
-    const P = (a: number, l: number, y: number) => [s.x + dx * a + lx * l, y, s.z + dz * a + lz * l];
-    hexa(T, [P(-l2, -w2, s.base), P(l2, -w2, s.base), P(l2, w2, s.base), P(-l2, w2, s.base)], [P(-l2, -w2, s.top), P(l2, -w2, s.top), P(l2, w2, s.top), P(-l2, w2, s.top)]);
+    const [c0, c1, c2, c3] = s.c; const at = (c: [number, number], y: number) => [c[0], y, c[1]];
+    hexa(T, [at(c0, s.base), at(c1, s.base), at(c2, s.base), at(c3, s.base)], [at(c0, s.top), at(c1, s.top), at(c2, s.top), at(c3, s.top)]);
   }
   return finish(T);
 }
