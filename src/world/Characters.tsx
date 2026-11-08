@@ -313,11 +313,11 @@ function distToHouses(houses: HouseLite[], x: number, z: number): number {
 export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number, z: number) => number | null, inSite: (x: number, z: number) => boolean, seed = 3): [number, number, number, number] | null {
   const r = rng(seed); let best: { s: number; rect: [number, number, number, number] } | null = null;
   const dbg = { site: 0, house: 0, path: 0, null: 0, slope: 0, ok: 0 }; (window as unknown as { __lawnDbg: unknown }).__lawnDbg = dbg;
-  for (let k = 0; k < 1500; k++) {
-    const cx = -90 + r() * 180, cz = -70 + r() * 140; const w = 8, d = 6;
+  for (let k = 0; k < 5000; k++) {
+    const cx = -90 + r() * 180, cz = -70 + r() * 140; const w = 6, d = 5;
     const corners: [number, number][] = [[cx - w / 2, cz - d / 2], [cx + w / 2, cz - d / 2], [cx - w / 2, cz + d / 2], [cx + w / 2, cz + d / 2], [cx, cz]];
     if (!corners.every(([x, z]) => inSite(x, z))) { dbg.site++; continue; }
-    const dh = Math.min(...corners.map(([x, z]) => distToHouses(houses, x, z))); if (dh < 4) { dbg.house++; continue; } // не под террасами и фундаментами
+    const dh = Math.min(...corners.map(([x, z]) => distToHouses(houses, x, z))); if (dh < 3) { dbg.house++; continue; } // не под террасами и фундаментами
     const dp = Math.min(...corners.map(([x, z]) => distToPaths(net, x, z))); if (dp < 2.5) { dbg.path++; continue; }
     const hs = corners.map(([x, z]) => heightAt(x, z)); if (hs.some((v) => v === null)) { dbg.null++; continue; }
     // вокруг площадки (+3 м) ни одной точки воды: косилка не должна ездить по берегу и по воде
