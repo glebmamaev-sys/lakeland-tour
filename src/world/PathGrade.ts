@@ -78,7 +78,9 @@ export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6
       }
     }
   }
-  for (let k = 0; k < N; k++) { if (best[k] <= HALF && !fixed[k]) { fx[k] = 1; corridor[k] = 1; } else if (best[k] <= HALF) ht[k] = h[k]; else if (best[k] < Infinity) ht[k] = h[k]; }
+  // зафиксированные клетки (площадки у двери магазина, кромки площадок домов) коридор тоже срезает, если они выше профиля —
+  // иначе газон торчит сквозь ленту; ниже профиля — оставляем (лента их накрывает)
+  for (let k = 0; k < N; k++) { if (best[k] <= HALF && (!fixed[k] || h[k] > ht[k] + 0.08)) { fx[k] = 1; corridor[k] = 1; } else if (best[k] <= HALF) ht[k] = h[k]; else if (best[k] < Infinity) ht[k] = h[k]; }
   return { fixed: fx, h: ht, steps, flights, corridor, ribbons };
 }
 
