@@ -119,7 +119,7 @@ export function buildShop(W: number, D: number, tex: ShopTextures, groundDrop = 
   walls.push(new BoxGeometry(W, WALL_H, T).translate(0, WALL_H / 2, -hd + T / 2));
   for (const sx of [-1, 1]) walls.push(new BoxGeometry(T, WALL_H, D).translate(sx * (hw - T / 2), WALL_H / 2, 0));
   // фасад: стойки через ~2,3 м, дверной проём 1,8 м по центру с фрамугой
-  const posts = [-hw + 0.06, -hw / 2 - 0.5, -0.95, 0.95, hw / 2 + 0.5, hw - 0.06];
+  const posts = [-hw + T + 0.06, -hw / 2 - 0.5, -0.95, 0.95, hw / 2 + 0.5, hw - T - 0.06]; // крайние стойки внутри боковых стен, не вровень с их торцами (мерцание)
   for (const x of posts) matte.push(box(0.12, WALL_H, 0.12, C.walnut, x, 0, hd - 0.06, 0.03));
   for (let i = 0; i < posts.length - 1; i++) {
     const a = posts[i], b = posts[i + 1]; const door = a === -0.95;
