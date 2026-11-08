@@ -2,13 +2,13 @@
 // ответвления к каждому дому. Ленты по рельефу с UV вдоль длины; узлы пригодятся для маршрутов персонажей.
 import { BufferGeometry, CatmullRomCurve3, Float32BufferAttribute, Matrix4, Vector3 } from 'three';
 
-export type HouseLite = { id: string; model: string; matrix: Matrix4 };
+export type HouseLite = { id: string; model: string; matrix: Matrix4; fp?: [number, number, number, number] };
 export type PathNet = { lines: Vector3[][]; nodes: Vector3[] };
 
 const L = (h: HouseLite, x: number, z: number) => new Vector3(x, 0, z).applyMatrix4(h.matrix);
 
 /** Сеть дорожек в мировых координатах (y = 0, высота берётся при построении ленты). */
-export function buildPathNetwork(houses: HouseLite[], entrance: [number, number], avoid?: { x: number; z: number; r: number; toward: [number, number] }): PathNet {
+export function buildPathNetwork(houses: HouseLite[], entrance: [number, number], avoid?: { x: number; z: number; r: number; toward: [number, number] }, entries: { x: number; z: number; yaw: number }[] = []): PathNet {
   const H = (id: string) => houses.find((h) => h.id === id)!;
   const lines: Vector3[][] = [];
   const E = new Vector3(entrance[0], 0, entrance[1]);
@@ -41,6 +41,41 @@ export function buildPathNetwork(houses: HouseLite[], entrance: [number, number]
   // короткие подъезды к домам 2.x (южная сторона, где старт одиночной прогулки) и к вилле 2.2
   lines.push([mid1, p21]); lines.push([mid2, p22]); lines.push([mid1, p23]);
   // спусков вдоль восточной стороны вилл 1.x больше нет: полоса x=11,5 — внутри пятна дома (его собственные террасы и лестницы)
+  // тропинка к каждому входу: от ближайшей точки сети до точки в 2,2 м перед дверью (yaw — взгляд внутрь дома)
+  const invAll = houses.map((h) => ({ m: h.matrix.clone().invert(), fp: h.fp })); const lq = new Vector3();
+  const insideFp = (x: number, z: number, hh: { m: Matrix4; fp?: [number, number, number, number] }, mg: number) => { if (!hh.fp) return false; lq.set(x, 0, z).applyMatrix4(hh.m); return lq.x > hh.fp[0] - mg && lq.x < hh.fp[2] + mg && lq.z > hh.fp[1] - mg && lq.z < hh.fp[3] + mg; };
+  for (const e of entries) {
+    // точка входа задана внутри дома: идём от неё наружу (против взгляда внутрь), пока не выйдем из габарита дома, и ещё 1,5 м
+    const own = invAll.find((hh) => insideFp(e.x, e.z, hh, -1.2)) ?? null; let t = 0.5;
+    if (own) while (t < 14 && insideFp(e.x - Math.sin(e.yaw) * t, e.z - Math.cos(e.yaw) * t, own, -1.2)) t += 0.25;
+    t += 1.5;
+    const P = new Vector3(e.x - Math.sin(e.yaw) * t, 0, e.z - Math.cos(e.yaw) * t);
+    // ближайшая точка сети к точке S; возвращает линию/сегмент для вставки узла
+    const nearest = (S: Vector3) => { let best: { d: number; li: number; si: number; q: Vector3 } | null = null;
+      for (let li = 0; li < lines.length; li++) { const l = lines[li]; for (let si = 0; si < l.length - 1; si++) {
+        const a = l[si], b = l[si + 1]; const dx = b.x - a.x, dz = b.z - a.z; const L2 = dx * dx + dz * dz || 1; const tt = Math.max(0, Math.min(1, ((S.x - a.x) * dx + (S.z - a.z) * dz) / L2));
+        const q = new Vector3(a.x + dx * tt, 0, a.z + dz * tt); const d = q.distanceTo(S); if (!best || d < best.d) best = { d, li, si, q }; } }
+      return best; };
+    const crosses = (A: Vector3, B: Vector3) => { const n = Math.max(2, Math.ceil(A.distanceTo(B) / 0.5));
+      for (let si = 0; si <= n; si++) { const tt = si / n; const x = A.x + (B.x - A.x) * tt, z = A.z + (B.z - A.z) * tt; for (const hh of invAll) if (insideFp(x, z, hh, hh === own ? -1.2 : -0.6)) return true; } return false; }; // чужой дом: не ближе 0,6 м к его габариту (виллы 1.x стоят в 2–3 м друг от друга)
+    const direct = nearest(P); if (!direct) continue;
+    if (direct.d < 3) { console.info('[entry]', +e.x.toFixed(1), +e.z.toFixed(1), 'рядом с дорожкой', +direct.d.toFixed(1)); continue; }
+    let route: { q: typeof direct; via: Vector3 | null; len: number } | null = null;
+    if (!crosses(direct.q, P)) route = { q: direct, via: null, len: direct.d };
+    else if (own && own.fp) {
+      // обход вокруг своего дома: через угол габарита (+2 м), от которого прямая к сети не задевает дома
+      const fwd = own.m.clone().invert(); const [fx0, fz0, fx1, fz1] = own.fp;
+      for (const [cx, cz] of [[fx0 - 0.8, fz0 - 0.8], [fx1 + 0.8, fz0 - 0.8], [fx1 + 0.8, fz1 + 0.8], [fx0 - 0.8, fz1 + 0.8]]) {
+        const Wp = new Vector3(cx, 0, cz).applyMatrix4(fwd); Wp.y = 0; const nq = nearest(Wp); if (!nq) continue;
+        if (crosses(Wp, P) || crosses(nq.q, Wp)) continue;
+        const len = nq.d + Wp.distanceTo(P); if (!route || len < route.len) route = { q: nq, via: Wp, len };
+      }
+    }
+    if (!route) { console.info('[entry]', +e.x.toFixed(1), +e.z.toFixed(1), 'тропинку не провести (пересекает дома)'); continue; }
+    const l = lines[route.q.li]; if (route.q.q.distanceTo(l[route.q.si]) > 0.5 && route.q.q.distanceTo(l[route.q.si + 1]) > 0.5) l.splice(route.q.si + 1, 0, route.q.q); // узел на основной дорожке
+    lines.push(route.via ? [route.q.q.clone(), route.via, P] : [route.q.q.clone(), P]);
+    console.info('[entry]', +e.x.toFixed(1), +e.z.toFixed(1), route.via ? 'тропинка в обход дома' : 'тропинка', +route.len.toFixed(1), 'м');
+  }
   const nodes: Vector3[] = []; for (const l of lines) for (const p of l) if (!nodes.some((n) => n.distanceTo(p) < 0.5)) nodes.push(p.clone());
   return { lines, nodes };
 }

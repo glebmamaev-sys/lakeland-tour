@@ -3,7 +3,7 @@
 // стоит на полу (y=0), «лицом» на +z, центр в (0,0). Собирается в один меш на материал.
 import {
   BoxGeometry, BufferAttribute, BufferGeometry, Color, CylinderGeometry, LatheGeometry, PlaneGeometry, SphereGeometry,
-  TorusGeometry, Vector2, Vector3, Quaternion,
+  TorusGeometry, Vector2, Vector3, Quaternion, Shape, ExtrudeGeometry,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
@@ -148,6 +148,15 @@ export function chair(): BufferGeometry {
   const p: BufferGeometry[] = [box(0.44, 0.04, 0.44, C.walnut, 0, 0.44, 0), box(0.44, 0.44, 0.03, C.rattan, 0, 0.48, -0.2, 0.06)];
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(box(0.035, 0.44, 0.035, C.walnut, sx * 0.2, 0, sz * 0.2));
   return merge(p);
+}
+/** Отдельно стоящая ванна: скруглённый овальный борт, чаша внутри, белый акрил. Длина l, ширина w, высота 0,56. */
+export function bathtub(l = 1.7, w = 0.8): BufferGeometry {
+  const rr = (x: number, z: number, lw: number, ww: number, r: number) => { const s = new Shape(); s.moveTo(x - lw / 2 + r, z - ww / 2); s.lineTo(x + lw / 2 - r, z - ww / 2); s.quadraticCurveTo(x + lw / 2, z - ww / 2, x + lw / 2, z - ww / 2 + r); s.lineTo(x + lw / 2, z + ww / 2 - r); s.quadraticCurveTo(x + lw / 2, z + ww / 2, x + lw / 2 - r, z + ww / 2); s.lineTo(x - lw / 2 + r, z + ww / 2); s.quadraticCurveTo(x - lw / 2, z + ww / 2, x - lw / 2, z + ww / 2 - r); s.lineTo(x - lw / 2, z - ww / 2 + r); s.quadraticCurveTo(x - lw / 2, z - ww / 2, x - lw / 2 + r, z - ww / 2); return s; };
+  const outer = rr(0, 0, l, w, Math.min(0.38, w / 2 - 0.01)); const hole = rr(0, 0, l - 0.16, w - 0.16, Math.min(0.3, (w - 0.16) / 2 - 0.01)); outer.holes.push(hole);
+  const wall = new ExtrudeGeometry(outer, { depth: 0.56, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 2, curveSegments: 10 }); wall.rotateX(-Math.PI / 2); wall.translate(0, 0, 0);
+  const bottom = new ExtrudeGeometry(rr(0, 0, l - 0.14, w - 0.14, 0.28), { depth: 0.1, bevelEnabled: false, curveSegments: 10 }); bottom.rotateX(-Math.PI / 2); bottom.translate(0, 0.0, 0);
+  const tap = new CylinderGeometry(0.012, 0.012, 0.25, 8); tap.translate(0, 0.68, -w / 2 + 0.06); const spout = new BoxGeometry(0.02, 0.02, 0.16); spout.translate(0, 0.8, -w / 2 + 0.14);
+  return merge([col(wall, '#f7f6f2'), col(bottom, '#f2f1ed'), col(tap, '#c9c9c4'), col(spout, '#c9c9c4')]);
 }
 export function towelLadder(): BufferGeometry {
   const p: BufferGeometry[] = [];

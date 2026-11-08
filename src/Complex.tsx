@@ -7,10 +7,10 @@ import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, ExtrudeGeometry,
   Float32BufferAttribute, Group, LOD, Matrix4, Mesh, MeshStandardMaterial, type Object3D,
-  Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3, type Intersection,
+  Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3, type Intersection, Quaternion,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { applyMaterialRules, openDoors } from './materials';
+import { applyMaterialRules, openDoors, splitComponents } from './materials';
 import { buildCollider, buildColliderFromParts, collectColliderParts, colliderStore, type Collider } from './collider';
 import { MODELS } from './models';
 import { asset } from './assets';
@@ -27,6 +27,9 @@ import { buildShop } from './world/Shop';
 import { Grass } from './world/Grass';
 import { planTerraces, wallGeometry, type Terraces } from './world/Terraces';
 import { gradePaths, stepGeometry, type Graded } from './world/PathGrade';
+import { buildIndoor, indoorAt, type IndoorMask } from './world/Indoor';
+import * as F from './world/Furniture';
+import { DataTexture, NearestFilter, RedFormat, UnsignedByteType, Vector2 } from 'three';
 import { Lotuses, placeLotuses, type LotusItem } from './world/Lotus';
 import { ModelPlants } from './world/ModelPlants';
 import { useQuality } from './world/Quality';
@@ -70,6 +73,9 @@ function setStage(name: string) {
   complexStage.listeners.forEach((l) => l(name));
 } // кэш между заходами в режим (сцена размонтируется при смене режима)
 
+/** Маски «внутри дома» по типам вилл (координаты плана) и мировая маска участка для шейдера рельефа. */
+const indoorMasks = new Map<string, IndoorMask>();
+const INDOOR = { tex: { value: null as DataTexture | null }, i0: { value: new Vector2() }, size: { value: new Vector2(1, 1) }, has: { value: 0 } };
 /** Точка старта пешей прогулки: у въезда рядом с магазином, взгляд на ряд вилл. */
 const WALK_SPAWN_XZ: [number, number] = [-36, -34];
 const LOD_FAR = 65;
@@ -185,11 +191,39 @@ function whitenBath(scene: Object3D, plan: Plan) {
   }
   if (!boxes.length) return;
   const acrylic = new MeshStandardMaterial({ color: '#f7f6f2', roughness: 0.12, metalness: 0, side: DoubleSide });
-  const targets: Mesh[] = []; scene.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.userData.role === 'walnut') targets.push(m); });
+  const targets: Mesh[] = []; scene.traverse((o) => { const m = o as Mesh; if (m.isMesh && (m.userData.role === 'walnut' || m.userData.role === 'plants')) targets.push(m); });
   for (const m of targets) {
-    const inside = splitOutBoxes(m, boxes); if (!inside) continue;
-    const nm = new Mesh(inside, acrylic); nm.position.copy(m.position); nm.quaternion.copy(m.quaternion); nm.scale.copy(m.scale);
-    nm.userData.role = 'default'; nm.castShadow = true; nm.receiveShadow = true; nm.name = m.name + '-bath'; m.parent?.add(nm);
+    if (m.userData.role === 'walnut') {
+      // ванна из Revit — грубая «деревянная» форма: в каждом санузле ищем связный кусок размером с ванну и ставим вместо
+      // него процедурную того же пятна; остальное дерево санузла — белый акрил
+      const tubPred = (sz: Vector3) => { const L = Math.max(sz.x, sz.z), Wd = Math.min(sz.x, sz.z); return L >= 1.3 && L <= 2.4 && Wd >= 0.6 && Wd <= 1.3 && sz.y >= 0.3 && sz.y <= 0.95; };
+      const rest: BufferGeometry[] = [];
+      for (const b of boxes) {
+        const piece = splitOutBoxes(m, [b]); if (!piece) continue;
+        const tmp = new Mesh(piece); tmp.position.copy(m.position); tmp.quaternion.copy(m.quaternion); tmp.scale.copy(m.scale); m.parent?.add(tmp); tmp.updateWorldMatrix(true, false);
+        let tubGeom: BufferGeometry | null = null;
+        const part = splitComponents(tmp, tubPred);
+        if (part) tubGeom = part.geometry;
+        else { const sz = new Box3().setFromBufferAttribute(piece.getAttribute('position') as BufferAttribute).applyMatrix4(tmp.matrixWorld).getSize(new Vector3()); if (tubPred(sz)) { tubGeom = tmp.geometry; tmp.geometry = new BufferGeometry(); } }
+        if (tubGeom && tubGeom.getAttribute('position')) {
+          const wb = new Box3().setFromBufferAttribute(tubGeom.getAttribute('position') as BufferAttribute).applyMatrix4(tmp.matrixWorld); const sz = wb.getSize(new Vector3());
+          const tub = new Mesh(F.bathtub(Math.min(Math.max(sz.x, sz.z), 1.9), Math.min(Math.min(sz.x, sz.z), 0.9)), acrylic);
+          // шаблон дома повёрнут (Revit Z-up) и сдвинут: ставим ванну в мировые координаты через обёртку-группу в системе сцены
+          const holder = new Group(); scene.add(holder); scene.updateMatrixWorld(true);
+          holder.position.copy(scene.worldToLocal(new Vector3((wb.min.x + wb.max.x) / 2, wb.min.y, (wb.min.z + wb.max.z) / 2)));
+          const sq = new Quaternion(); scene.getWorldQuaternion(sq); holder.quaternion.copy(sq.invert()); if (sz.x < sz.z) tub.rotation.y = Math.PI / 2;
+          tub.userData.role = 'default'; tub.castShadow = true; tub.receiveShadow = true; tub.name = 'bathtub'; holder.add(tub);
+          console.info('[bath]', plan.villa, 'ванна заменена', { L: +Math.max(sz.x, sz.z).toFixed(2), W: +Math.min(sz.x, sz.z).toFixed(2) });
+        }
+        const posA = tmp.geometry.getAttribute('position'); m.parent?.remove(tmp);
+        if (posA && posA.count) rest.push(tmp.geometry);
+      }
+      for (const g of rest) { const nm = new Mesh(g, acrylic); nm.position.copy(m.position); nm.quaternion.copy(m.quaternion); nm.scale.copy(m.scale); nm.userData.role = 'default'; nm.castShadow = true; nm.receiveShadow = true; nm.name = m.name + '-bath'; m.parent?.add(nm); }
+    } else {
+      // «растения» Revit внутри санузла — сиденье унитаза и прочая керамика: белые
+      const inside = splitOutBoxes(m, boxes); if (!inside) continue;
+      const nm = new Mesh(inside, acrylic); nm.position.copy(m.position); nm.quaternion.copy(m.quaternion); nm.scale.copy(m.scale); nm.userData.role = 'default'; nm.castShadow = true; nm.receiveShadow = true; nm.name = m.name + '-bath'; m.parent?.add(nm);
+    }
   }
 }
 /** Вырезает из меша треугольники с центром (мир) внутри любой из коробок: возвращает их геометрию, меш остаётся без них. */
@@ -272,6 +306,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         console.info('[furniture]', MODEL_IDS[k], furn.children.map((m) => ((m as Mesh).geometry.getAttribute('position').count / 3) | 0), 'tris in', (performance.now() - t1) | 0, 'ms');
       }
       if (plan && !g.scene.userData.bathDone) { whitenBath(g.scene, plan); g.scene.userData.bathDone = true; }
+      if (plan && !indoorMasks.has(MODEL_IDS[k])) indoorMasks.set(MODEL_IDS[k], buildIndoor(plan, glassBoxes(g.scene)));
       const low = lows[k].scene;
       if (!low.userData.prepared) {
         low.rotation.set(...cfg0.rotation); low.position.set(...cfg0.offset); low.updateMatrixWorld(true);
@@ -502,6 +537,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const [fx0, fz0, fx1, fz1] = hi.fp; const inFoot = (x: number, z: number) => { lpv.set(x, 0, z); inst.worldToLocal(lpv); return lpv.x > fx0 + 1.2 && lpv.x < fx1 - 1.2 && lpv.z > fz0 + 1.2 && lpv.z < fz1 - 1.2; }; // строго габарит мешей дома: снаружи стен рельеф не трогаем (были «дырки» у входов)
       const col = buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => m.userData.role === 'water' || m.userData.role === 'ground' || m.userData.role === 'terrain' || m.userData.role === 'glass' || m.userData.role === 'plants'));
       if (!col) continue;
+      const planL = data.plans[hi.model]; const minLevel = planL ? Math.min(...planL.levels.map((l) => l.level)) : 0;
       let lowered = 0; const cp = col.geometry.getAttribute('position') as BufferAttribute; const e1 = new Vector3(), e2 = new Vector3(), nrm = new Vector3(), v0 = new Vector3();
       // нормаль треугольника по индексу грани (геометрия коллайдера неиндексированная, мировые координаты)
       const upFacing = (ht: Intersection) => {
@@ -520,27 +556,51 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         const hits = col.bvh.raycast(ray, DoubleSide);
         if (!hits.length) continue;
         let low = Infinity; for (const ht of hits) if (upFacing(ht)) low = Math.min(low, 80 - ht.distance);
+        low = Math.max(low, inst.position.y + minLevel - 0.3); // ниже нижнего пола дома поверхностей, по которым ходят, нет
         const k = j * nx + i; footMask[k] = 1; if (h[k] > low - 0.05) { h[k] = low - 0.05; lowered++; lowMask[k] = 1; }
       }
       console.info('[floors]', hi.id, 'земля опущена под полами в', lowered, 'клетках');
       col.geometry.dispose();
     }
-    // клетки под стенами (луч сверху упирается в верх стены) и прочие неопущенные клетки пятна дома берут отметку
-    // соседней опущенной клетки — иначе сетка 0,5 м «вздувается» газоном вдоль стен внутри комнат
-    // один проход (толщина стены ≤ 1 клетки): дальше наружу — уже улица, там должен остаться уличный рельеф
-    for (let pass = 0; pass < 1; pass++) {
-      let changed = 0;
-      for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
-        const k = j * nx + i; if (!footMask[k] || lowMask[k]) continue;
-        let v = Infinity, cnt = 0; for (const n of [k - 1, k + 1, k - nx, k + nx]) if (lowMask[n]) { v = Math.min(v, h[n]); cnt++; }
-        if (cnt >= 2 && v < h[k] - 0.02) { h[k] = v; lowMask[k] = 1; changed++; } // стена между комнатами (опущено с двух сторон); наружная стена — нет
+    // под наружными лестницами и террасами: минимум по окрестности 1 м среди опущенных клеток — земля ниже
+    // нижней ступени марша, а не повторяет ступени (грунт торчал сквозь проступи)
+    { const src = Float32Array.from(h); const rr = 2;
+      for (let j = rr; j < nz - rr; j++) for (let i = rr; i < nx - rr; i++) { const k = j * nx + i; if (!lowMask[k]) continue; let v = src[k]; for (let dj = -rr; dj <= rr; dj++) for (let di = -rr; di <= rr; di++) { const n = k + dj * nx + di; if (lowMask[n]) v = Math.min(v, src[n]); } h[k] = v; } }
+    // интерьер по планам: мировая маска 0,1 м (стены + комнаты до наружной грани); в глубине ≥ 0,5 м от грани
+    // земля на 5 см ниже пола этого места, у грани остаётся отметка площадки — рельеф внутри маски не рисуется
+    const WX = 0.1, wnx = Math.ceil((nx - 1) * step / WX) + 1, wnz = Math.ceil((nz - 1) * step / WX) + 1;
+    const wmask = new Uint8Array(wnx * wnz), wfloor = new Float32Array(wnx * wnz).fill(Infinity), wgreen = new Float32Array(wnx * wnz).fill(NaN);
+    for (const inst of instances) {
+      const hi = houses.find((x) => x.id === inst.name.slice('house-'.length)); const m = hi && indoorMasks.get(hi.model); if (!hi || !m) continue;
+      const inv = inst.matrixWorld.clone().invert(); const lp = new Vector3();
+      const corners = [[m.x0, m.z0], [m.x0 + (m.nx - 1) * m.step, m.z0], [m.x0, m.z0 + (m.nz - 1) * m.step], [m.x0 + (m.nx - 1) * m.step, m.z0 + (m.nz - 1) * m.step]].map(([x, z]) => new Vector3(x, 0, z).applyMatrix4(inst.matrixWorld));
+      const bx0 = Math.min(...corners.map((v) => v.x)), bx1 = Math.max(...corners.map((v) => v.x)), bz0 = Math.min(...corners.map((v) => v.z)), bz1 = Math.max(...corners.map((v) => v.z));
+      const i0 = Math.max(0, Math.floor((bx0 - x0) / WX)), i1 = Math.min(wnx - 1, Math.ceil((bx1 - x0) / WX)), j0 = Math.max(0, Math.floor((bz0 - z0) / WX)), j1 = Math.min(wnz - 1, Math.ceil((bz1 - z0) / WX));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        lp.set(x0 + i * WX, 0, z0 + j * WX).applyMatrix4(inv); const r = indoorAt(m, lp.x, lp.z); const k = j * wnx + i;
+        if (r.green) wgreen[k] = Number.isNaN(wgreen[k]) ? inst.position.y + r.greenFloor : Math.min(wgreen[k], inst.position.y + r.greenFloor);
+        if (!r.inside) continue;
+        wmask[k] = 1; wfloor[k] = Math.min(wfloor[k], inst.position.y + r.floor);
       }
-      if (!changed) break;
     }
+    const indoorW = (x: number, z: number) => { const i = Math.round((x - x0) / WX), j = Math.round((z - z0) / WX); if (i < 0 || j < 0 || i >= wnx || j >= wnz) return null; const k = j * wnx + i; return wmask[k] ? wfloor[k] : null; };
+    // зелёные зоны плана (посадки у бассейна виллы 3 на нижнем уровне): газон на отметке своего уровня — не «бугор» верхнего рельефа
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+      const x = x0 + i * step, z = z0 + j * step; const gi = Math.round((x - x0) / WX), gj = Math.round((z - z0) / WX); if (gi < 0 || gj < 0 || gi >= wnx || gj >= wnz) continue;
+      const gf = wgreen[gj * wnx + gi]; if (Number.isNaN(gf)) continue; const k = j * nx + i; h[k] = gf - 0.02; if (gradeFixed) gradeFixed[k] = 1;
+    }
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+      const x = x0 + i * step, z = z0 + j * step; const f = indoorW(x, z); if (f === null) continue;
+      const k = j * nx + i; if (gradeFixed) gradeFixed[k] = 1;
+      let deep = true; for (let a = 0; a < 8 && deep; a++) if (indoorW(x + Math.cos(a * Math.PI / 4) * 0.55, z + Math.sin(a * Math.PI / 4) * 0.55) === null) deep = false;
+      if (deep) h[k] = Math.min(h[k], f - 0.05); // у грани (≤ 0,5 м) — отметка площадки, перепад к полу спрятан внутри маски
+    }
+    { const tex = new DataTexture(wmask, wnx, wnz, RedFormat, UnsignedByteType); tex.minFilter = tex.magFilter = NearestFilter; tex.needsUpdate = true;
+      INDOOR.tex.value = tex; INDOOR.i0.value.set(x0, z0); INDOOR.size.value.set((wnx - 1) * WX, (wnz - 1) * WX); INDOOR.has.value = 1; }
     // дорожка начинается перед дверью магазина (он сдвинут на 15 м, прежняя точка въезда оказалась внутри него) и обходит его
     const shopP = c.buildings.find((b) => b.model === 'shop'); const pose = shopP ? shopPose(shopP, houses, c.site.boundary) : null;
     const net = buildPathNetwork(houses, pose ? pose.door : (WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]),
-      pose ? { x: pose.pos[0], z: pose.pos[1], r: pose.r, toward: WALK_SPAWN_XZ } : undefined);
+      pose ? { x: pose.pos[0], z: pose.pos[1], r: pose.r, toward: WALK_SPAWN_XZ } : undefined, houses.map((hh) => ({ x: hh.entry[0], z: hh.entry[2], yaw: hh.entryYaw })));
     let terr: Terraces | null = null; let graded: Graded | null = null;
     // под магазином земля не выше его пола: пол ставится по отметке у двери (+0,12), цоколь 1,8 м прячет перепад;
     // пятно магазина опускается на 0,5 м ниже отметки у двери и фиксируется, пятачок у двери фиксируется как есть
@@ -683,7 +743,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const bottom = makeBottomTexture(h, nx, nz, x0, z0, step, W); // карта дна для прозрачной воды
     // дорожки: сеть по генплану (въезд → проезд между 2.x → дорога ряда 1.x → вилла 3), ленты 2,6 м по рельефу
     setStage('terrain:paths');
-    const ribbons = net.lines.map((l) => pathRibbon(l, 2.6, (x, z) => siteAt(x, z) ?? heightAt(x, z))).filter((g): g is BufferGeometry => !!g);
+    const ribbons = graded ? graded.ribbons : net.lines.map((l) => pathRibbon(l, 2.6, (x, z) => siteAt(x, z) ?? heightAt(x, z))).filter((g): g is BufferGeometry => !!g);
     const paths = ribbons.length ? mergeGeometries(ribbons, false) : null;
     // пальмы: окрестности (сетка 14 м со случайным сдвигом, суша, не на домах) и участок (в зелёных зонах, не на дорожках);
     // ближние (до 260 м от центра участка) — с перистыми листьями, дальние — простые
@@ -735,6 +795,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       if (!inPoly(x, z, c.site.boundary) || waterAt(x, z) || distToPaths(net, x, z) < 1.3) return false;
       if (terr) { const ti = Math.round((x - x0) / step), tj = Math.round((z - z0) / step); if (ti >= 0 && tj >= 0 && ti < nx && tj < nz && terr.mask[tj * nx + ti]) return false; }
       if (shopB && Math.hypot(x - shopB.pos[0], z - shopB.pos[1]) < 8.5) return false;
+      if (indoorW(x, z) !== null) return false;
       for (const { m, fp } of hpInv) { lpG.set(x, 0, z).applyMatrix4(m); if (lpG.x > fp[0] - 0.3 && lpG.x < fp[2] + 0.3 && lpG.z > fp[1] - 0.3 && lpG.z < fp[3] + 0.3) return false; }
       return true;
     };
@@ -812,12 +873,14 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const noise = makeNoiseTexture(256, 3); const level = data?.c.water_level ?? 0;
     m.onBeforeCompile = (sh) => {
       sh.uniforms.uNoise = { value: noise }; sh.uniforms.uNoiseScale = { value: scale }; sh.uniforms.uTime = WATER_TIME; sh.uniforms.uLevel = { value: level };
+      sh.uniforms.uIndoor = INDOOR.tex; sh.uniforms.uI0 = INDOOR.i0; sh.uniforms.uISize = INDOOR.size; sh.uniforms.uHasIndoor = INDOOR.has;
       sh.vertexShader = sh.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vWp;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWp = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform sampler2D uNoise; uniform float uNoiseScale; uniform float uTime, uLevel; varying vec3 vWp;')
+        .replace('#include <common>', '#include <common>\nuniform sampler2D uNoise; uniform float uNoiseScale; uniform float uTime, uLevel; varying vec3 vWp; uniform sampler2D uIndoor; uniform vec2 uI0, uISize; uniform float uHasIndoor;')
         .replace('#include <map_fragment>', `#include <map_fragment>
+          ${caustics ? 'if (uHasIndoor > 0.5) { vec2 iuv = (vWp.xz - uI0) / uISize; if (iuv.x > 0.0 && iuv.x < 1.0 && iuv.y > 0.0 && iuv.y < 1.0 && texture2D(uIndoor, iuv).r > 0.5) discard; }' : ''}
           float nz = texture2D(uNoise, vMapUv * uNoiseScale).r;
           float nz2 = texture2D(uNoise, vMapUv * uNoiseScale * 7.3 + 0.37).r;
           diffuseColor.rgb *= mix(0.78, 1.16, nz) * mix(0.9, 1.08, nz2);

@@ -306,6 +306,7 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
     }
     items.sort((p, q) => p.a - q.a);
     const claimed: Rect[] = service.slice();
+    for (const [x1, z1, x2, z2] of l.stairs) claimed.push({ x0: Math.min(x1, x2) - 0.6, z0: Math.min(z1, z2) - 0.6, x1: Math.max(x1, x2) + 0.6, z1: Math.max(z1, z2) + 0.6 }); // лестницы плана: мебель и кадки не на проходе
     for (const b of water) if (b.max.y > l.level - 1 && b.min.y < l.level + 1) claimed.push({ x0: b.min.x - 0.3, z0: b.min.z - 0.3, x1: b.max.x + 0.3, z1: b.max.z + 0.3 }); // вода этого уровня
     if (import.meta.env.DEV) (window as unknown as { __service: unknown[] }).__service = [...((window as unknown as { __service?: unknown[] }).__service ?? []), { level: l.level, service, rooms: l.rooms.map((r) => [r.name, r.area, +r.x.toFixed(1), +r.z.toFixed(1)]) }];
     for (const { room, kind, rect, a } of items) {
