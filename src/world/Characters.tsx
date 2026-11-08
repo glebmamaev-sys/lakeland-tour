@@ -139,7 +139,7 @@ export function makeMower(): Mesh {
   p.push(box(0.5, 0.22, 0.62, '#3a7d44', 0, 0.12, 0.05));
   p.push(box(0.46, 0.08, 0.3, '#2a2927', 0, 0.34, 0.0));                                  // мотор
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const w = new CylinderGeometry(0.1, 0.1, 0.06, 10); w.rotateZ(Math.PI / 2); w.translate(sx * 0.27, 0.1, sz * 0.25 + 0.05); p.push(col(w, '#2a2927')); }
-  for (const sx of [-1, 1]) { const h = new BoxGeometry(0.03, 0.95, 0.03); h.translate(0, 0.475, 0); h.rotateX(0.75); h.translate(sx * 0.2, 0.25, -0.2); p.push(col(h, '#8c8c80')); }
+  for (const sx of [-1, 1]) { const h = new BoxGeometry(0.03, 0.95, 0.03); h.translate(0, 0.475, 0); h.rotateX(-0.75); h.translate(sx * 0.2, 0.25, -0.2); p.push(col(h, '#8c8c80')); } // стойки ручки наклонены назад, к садовнику (верх у перекладины z ≈ −0,85)
   p.push(box(0.46, 0.04, 0.04, '#2a2927', 0, 0.86, -0.85));                                 // перекладина ручки
   const m = new Mesh(merge(p), MAT); m.castShadow = true; return m;
 }
@@ -320,6 +320,9 @@ export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number
     const dh = Math.min(...corners.map(([x, z]) => distToHouses(houses, x, z))); if (dh < 4) { dbg.house++; continue; } // не под террасами и фундаментами
     const dp = Math.min(...corners.map(([x, z]) => distToPaths(net, x, z))); if (dp < 2.5) { dbg.path++; continue; }
     const hs = corners.map(([x, z]) => heightAt(x, z)); if (hs.some((v) => v === null)) { dbg.null++; continue; }
+    // вокруг площадки (+3 м) ни одной точки воды: косилка не должна ездить по берегу и по воде
+    let wet = false; for (let x = cx - w / 2 - 3; x <= cx + w / 2 + 3 && !wet; x += 1) for (let z = cz - d / 2 - 3; z <= cz + d / 2 + 3; z += 1) if (heightAt(x, z) === null || !inSite(x, z)) { wet = true; break; }
+    if (wet) { dbg.null++; continue; }
     const range = Math.max(...(hs as number[])) - Math.min(...(hs as number[])); if (range > 1.6) { dbg.slope++; continue; }
     dbg.ok++;
     const s = Math.min(dh, 10) + Math.min(dp, 6) - range * 3;
