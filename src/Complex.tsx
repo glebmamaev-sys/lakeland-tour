@@ -17,7 +17,7 @@ import { asset } from './assets';
 import { makeRamp } from './Villa';
 import { Player } from './Player';
 import { Frangipani, Palms, Shrubs, type Plant } from './world/Vegetation';
-import { Lagoon } from './world/Lagoon';
+import { Lagoon, WATER_TIME, makeBottomTexture, type Bottom } from './world/Lagoon';
 import { buildPathNetwork, distToPaths, pathRibbon, type PathNet } from './world/Paths';
 import { makeArtTexture, makeNoiseTexture, makeWeaveTexture, type DetailMaps } from './world/textures';
 import { furnishVilla, glassBoxes, waterBoxes, type TerraceSpot } from './world/Interiors';
@@ -79,7 +79,7 @@ const placePalmShort = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r *
 const placeBush = (p: Plant) => ({ x: p.x, y: p.y + 0.1, z: p.z, yaw: p.r * 6.28, height: 0.7 + p.s * 0.9 });
 const placeTree = (p: Plant) => ({ x: p.x, y: p.y + 0.05, z: p.z, yaw: p.r * 6.28, height: 4 + p.s * 2.5 });
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
-type BuiltScene = { site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; lotus: LotusItem[]; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
+type BuiltScene = { site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
@@ -480,10 +480,17 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       };
       void EDGE;
       const relaxFixed = new Uint8Array(nx * nz); const shore = new Uint8Array(nx * nz); // полоса воды у берега: сглаживается, но не выше W − 0,2
+      // дно лагуны: от уреза пологий песчаный уступ (2,5 м сглаживается вместе с берегом), дальше глубина растёт
+      // 0,5 м на метр до 4 м — сквозь прозрачную воду у берега видно дно, середина лагуны тёмная
+      const dShore = new Int32Array(nx * nz).fill(-1);
+      { const q: number[] = []; for (let k = 0; k < nx * nz; k++) if (!waterAt(x0 + (k % nx) * step, z0 + Math.floor(k / nx) * step)) { dShore[k] = 0; q.push(k); }
+        for (let qi = 0; qi < q.length; qi++) { const k = q[qi], i = k % nx; for (const n of [i > 0 ? k - 1 : -1, i < nx - 1 ? k + 1 : -1, k - nx, k + nx]) { if (n < 0 || n >= nx * nz || dShore[n] >= 0) continue; dShore[n] = dShore[k] + 1; q.push(n); } } }
+      const bedAt = (k: number) => { const d = dShore[k] < 0 ? 30 : dShore[k] * step; return W - 0.45 - Math.min(3.5, 0.5 * Math.max(0, d - 2.5)); };
       for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
         const x = x0 + i * step, z = z0 + j * step, k = j * nx + i;
-        if (inPoly(x, z, B)) { if (waterAt(x, z) && !(gradeFixed && gradeFixed[k])) { h[k] = W - 0.6; shore[k] = 1; } else if (gradeFixed && gradeFixed[k]) relaxFixed[k] = 1; continue; }
-        if (waterAt(x, z)) { h[k] = W - 0.6; if (distToBoundary(x, z) > 8) relaxFixed[k] = 1; else shore[k] = 1; continue; }
+        const wet = waterAt(x, z); const bed = bedAt(k); const shallow = dShore[k] >= 0 && dShore[k] * step <= 2.5;
+        if (inPoly(x, z, B)) { if (wet && !(gradeFixed && gradeFixed[k])) { h[k] = bed; if (shallow) shore[k] = 1; else relaxFixed[k] = 1; } else if (gradeFixed && gradeFixed[k]) relaxFixed[k] = 1; continue; }
+        if (wet) { h[k] = bed; if (!shallow || distToBoundary(x, z) > 8) relaxFixed[k] = 1; else shore[k] = 1; continue; }
         h[k] = Math.min(h[k], demLand(x, z)); if (distToBoundary(x, z) > 30) relaxFixed[k] = 1;
       }
       // гладкая поверхность между зафиксированными клетками (Гаусс–Зейдель с верхней релаксацией): площадки домов,
@@ -547,7 +554,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // в прямоугольнике сетки участка рельеф рисует сетка участка (0,5 м): окрестности прячем под неё, иначе
       // вершины SRTM (10 м) торчат «пирамидами» между границей участка и подведённой к виллам лагуной
       if (inPoly(x, z, c.site.boundary) || inGrid(x, z, 2)) y = Math.min(y, W - 3);
-      else if (isWater(x, z, raw)) y = Math.min(y, W - 0.6); // залитые клетки лагуны (подведена к виллам) — ниже уровня воды
+      else if (isWater(x, z, raw)) y = Math.min(y, W - 3); // вода вне сетки участка — глубоко (сквозь непрозрачную воду дна не видно)
       dp.set([x, y, z], k * 3); du.set([x / 12, z / 12], k * 2);
       const lc = coverAt(x, z); const cc = y < W + 1.5 ? shore : (lc === 2 ? openCol : landCol); dcol.set([cc.r, cc.g, cc.b], k * 3);
     }
@@ -576,6 +583,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     // подпорные стенки и лестницы террас (каменные), лотосы у берега лагуны
     const walls = terr ? wallGeometry(terr.walls) : null; const stairG = terr ? stairGeometry(terr.stairs) : { treads: null, cheeks: null }; void inHouseMask;
     const lotus = lagoonFine ? placeLotuses({ x0, z0, step, nx, nz }, lagoonFine) : [];
+    const bottom = makeBottomTexture(h, nx, nz, x0, z0, step, W); // карта дна для прозрачной воды
     // дорожки: сеть по генплану (въезд → проезд между 2.x → дорога ряда 1.x → вилла 3), ленты 2,6 м по рельефу
     setStage('terrain:paths');
     const ribbons = net.lines.map((l) => pathRibbon(l, 2.6, (x, z) => siteAt(x, z) ?? heightAt(x, z))).filter((g): g is BufferGeometry => !!g);
@@ -634,7 +642,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       return true;
     };
     (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
-    const builtNow = { site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, lotus, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
+    const builtNow = { site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, lotus, bottom, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
     (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, lotus: lotus.length };
   }, [data, instances, houses]);
@@ -706,22 +714,37 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
   const terraceSpots = useMemo(() => houses.flatMap((hh) => hh.spots), [houses]);
   const grass = tex.grass;
   // газон: плитка травы + крупный шум (убирает повторы) через onBeforeCompile
-  const grassVary = (m: MeshStandardMaterial, scale: number) => {
-    const noise = makeNoiseTexture(256, 3);
+  // вариации травы шумом; под водой (y < уровня) — бегущая каустика на песчаном дне, затухает с глубиной
+  const grassVary = (m: MeshStandardMaterial, scale: number, caustics = false) => {
+    const noise = makeNoiseTexture(256, 3); const level = data?.c.water_level ?? 0;
     m.onBeforeCompile = (sh) => {
-      sh.uniforms.uNoise = { value: noise }; sh.uniforms.uNoiseScale = { value: scale };
+      sh.uniforms.uNoise = { value: noise }; sh.uniforms.uNoiseScale = { value: scale }; sh.uniforms.uTime = WATER_TIME; sh.uniforms.uLevel = { value: level };
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWp;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWp = (modelMatrix * vec4(transformed, 1.0)).xyz;');
       sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform sampler2D uNoise; uniform float uNoiseScale;')
+        .replace('#include <common>', '#include <common>\nuniform sampler2D uNoise; uniform float uNoiseScale; uniform float uTime, uLevel; varying vec3 vWp;')
         .replace('#include <map_fragment>', `#include <map_fragment>
           float nz = texture2D(uNoise, vMapUv * uNoiseScale).r;
           float nz2 = texture2D(uNoise, vMapUv * uNoiseScale * 7.3 + 0.37).r;
           diffuseColor.rgb *= mix(0.78, 1.16, nz) * mix(0.9, 1.08, nz2);
-          diffuseColor.g *= 1.0 + (nz - 0.5) * 0.12;`);
+          diffuseColor.g *= 1.0 + (nz - 0.5) * 0.12;
+          ${caustics ? `
+          float depth = uLevel - vWp.y;
+          if (depth > 0.0) {
+            vec2 q = vWp.xz * 1.6; float t = uTime;
+            float c1 = sin(q.x * 1.3 + t * 0.9) * sin(q.y * 1.1 - t * 0.7);
+            float c2 = sin((q.x + q.y) * 0.9 + t * 1.1) * sin((q.x - q.y) * 1.2 + t * 0.6);
+            float c = pow(abs(c1 * c2), 1.4);
+            float fade = exp(-depth / 1.2);
+            diffuseColor.rgb *= (0.9 + 0.7 * c) * mix(1.0, 0.92, 1.0 - fade) ;
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.8, 0.95, 1.0), clamp(depth / 2.0, 0.0, 0.6)); // песок под водой холоднее
+          }` : ''}`);
     };
     return m;
   };
   const siteMat = useMemo(() => { const t = grass.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.needsUpdate = true;
-    return grassVary(new MeshStandardMaterial({ map: t, vertexColors: true, roughness: 1 }), 0.012); }, [grass]);
+    return grassVary(new MeshStandardMaterial({ map: t, vertexColors: true, roughness: 1 }), 0.012, true); }, [grass, data]);
   const demMat = useMemo(() => grassVary(new MeshStandardMaterial({ map: siteMat.map, vertexColors: true, roughness: 1 }), 0.006), [siteMat]);
   const roofMat = useMemo(() => new MeshStandardMaterial({ color: '#b5674a', roughness: 0.9 }), []);
   const wallMat = useMemo(() => new MeshStandardMaterial({ color: '#efe9de', roughness: 0.95 }), []);
@@ -780,7 +803,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
             <ModelPlants url={asset('models/nature/q_Bush_Large_Flowers.glb')} items={built.shrubs.filter((_, i) => i % 4 === 3)} place={placeBush} castShadow={false} />
             <ModelPlants url={asset('models/nature/q_MapleTree_1.glb')} items={built.frangipani} place={placeTree} />
           </Suspense>)}
-      {data && <Lagoon level={data.c.water_level} />}
+      {data && <Lagoon level={data.c.water_level} bottom={built?.bottom ?? null} />}
       {data && built && <Lotuses items={built.lotus} level={data.c.water_level} />}
       {built && complexStore.heightAt && !lowQ && !new URLSearchParams(location.search).has('nograss') && <Grass heightAt={complexStore.heightAt} ok={built.grassOk} count={Number(new URLSearchParams(location.search).get('grass')) || (input.mobile ? 15_000 : 45_000)} radius={input.mobile ? 18 : 26} />}
       {built && complexStore.heightAt && <Npcs net={built.net} heightAt={complexStore.heightAt} houses={houses} pools={pools} inSite={inSiteFn} audioBase={asset('')} shrubs={built.shrubs} lagoon={LAGOON_XZ} idlers={idlerSpecs} terraceSpots={terraceSpots} />}
