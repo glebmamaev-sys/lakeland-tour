@@ -371,6 +371,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         const pts: [number, number][] = []; for (let x = fp.min.x; x <= fp.max.x; x += 2) for (let z = fp.min.z; z <= fp.max.z; z += 2) pts.push([x, z]);
         floorTopo = pct(sampleLocal(pts), 0.5) + 0.25;
       }
+      // ручные поправки отметок по замечанию заказчика: вилла 3 с бассейном на 2 м выше топосъёмки (перепад к озеру в реальности меньше)
+      const FLOOR_ADJ: Record<string, number> = { '3': 2.0 };
+      floorTopo += FLOOR_ADJ[b.id] ?? 0;
       floorsTopo[b.id] = { plan: bb.floorPlan, topo: +floorTopo.toFixed(2) };
       b.floor = floorTopo;
       for (const root of [inner, innerLow]) root.traverse((o) => {
@@ -536,7 +539,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     // вырезка: под каждым домом земля не выше самой нижней ПОВЕРХНОСТИ ПОЛА модели (грани нормалью вверх: плиты
     // террас, полы, борта бассейнов) — по всему пятну дома с запасом 0,6 м. Нижние грани плит и свесы не считаются,
     // иначе вдоль консольных террас и карнизов получалась траншея; вода не считается — её плоскости шире чаш
-    const lpv = new Vector3(); const lowMask = new Uint8Array(nx * nz), footMask = new Uint8Array(nx * nz);
+    // рельеф под домом НЕ режем: внутри пятна дома он не рисуется и не участвует в коллайдере (маска ниже); здесь только
+    // запоминаем отметку верха плит (slabTop) — для цоколей/подпорных граней по границе пятна
+    const lpv = new Vector3(); const footMask = new Uint8Array(nx * nz), slabTop = new Float32Array(nx * nz).fill(NaN);
     for (const inst of instances) {
       inst.updateMatrixWorld(true);
       const hi = houses.find((x) => x.id === inst.name.slice('house-'.length)); if (!hi) continue;
@@ -544,7 +549,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const col = buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => m.userData.role === 'water' || m.userData.role === 'ground' || m.userData.role === 'terrain' || m.userData.role === 'glass' || m.userData.role === 'plants'));
       if (!col) continue;
       const planL = data.plans[hi.model]; const minLevel = planL ? Math.min(...planL.levels.map((l) => l.level)) : 0;
-      let lowered = 0; const cp = col.geometry.getAttribute('position') as BufferAttribute; const e1 = new Vector3(), e2 = new Vector3(), nrm = new Vector3(), v0 = new Vector3();
+      let found = 0; const cp = col.geometry.getAttribute('position') as BufferAttribute; const e1 = new Vector3(), e2 = new Vector3(), nrm = new Vector3(), v0 = new Vector3();
       // нормаль треугольника по индексу грани (геометрия коллайдера неиндексированная, мировые координаты)
       const upFacing = (ht: Intersection) => {
         if (ht.face && ht.face.normal) return ht.face.normal.y > 0.5;
@@ -563,20 +568,15 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         if (!hits.length) continue;
         let low = Infinity; for (const ht of hits) if (upFacing(ht)) low = Math.min(low, 80 - ht.distance);
         low = Math.max(low, inst.position.y + minLevel - 0.3); // ниже нижнего пола дома поверхностей, по которым ходят, нет
-        if (low < h[j * nx + i] - 1.5) low = Infinity; // плита далеко ниже окружающей земли — это пол нижнего уровня под консольной террасой, землю к нему не режем
-        const k = j * nx + i; footMask[k] = 1; if (h[k] > low - 0.05) { h[k] = low - 0.05; lowered++; lowMask[k] = 1; }
+        const k = j * nx + i; footMask[k] = 1; if (Number.isFinite(low)) { slabTop[k] = low; found++; }
       }
-      console.info('[floors]', hi.id, 'земля опущена под полами в', lowered, 'клетках');
+      console.info('[floors]', hi.id, 'плит/полов под пятном:', found, 'клеток');
       col.geometry.dispose();
     }
-    // под наружными лестницами и террасами: минимум по окрестности 1 м среди опущенных клеток — земля ниже
-    // нижней ступени марша, а не повторяет ступени (грунт торчал сквозь проступи)
-    { const src = Float32Array.from(h); const rr = 2;
-      for (let j = rr; j < nz - rr; j++) for (let i = rr; i < nx - rr; i++) { const k = j * nx + i; if (!lowMask[k]) continue; let v = src[k]; for (let dj = -rr; dj <= rr; dj++) for (let di = -rr; di <= rr; di++) { const n = k + dj * nx + di; if (lowMask[n]) v = Math.min(v, src[n]); } h[k] = v; } }
     // интерьер по планам: мировая маска 0,1 м (стены + комнаты до наружной грани); в глубине ≥ 0,5 м от грани
     // земля на 5 см ниже пола этого места, у грани остаётся отметка площадки — рельеф внутри маски не рисуется
     const WX = 0.1, wnx = Math.ceil((nx - 1) * step / WX) + 1, wnz = Math.ceil((nz - 1) * step / WX) + 1;
-    const wmask = new Uint8Array(wnx * wnz), wfloor = new Float32Array(wnx * wnz).fill(Infinity), wgreen = new Float32Array(wnx * wnz).fill(NaN);
+    const wmask = new Uint8Array(wnx * wnz), wfloor = new Float32Array(wnx * wnz).fill(Infinity), wgreen = new Float32Array(wnx * wnz).fill(NaN), wbox = new Uint8Array(wnx * wnz); // wbox: габарит мешей дома
     for (const inst of instances) {
       const hi = houses.find((x) => x.id === inst.name.slice('house-'.length)); const m = hi && indoorMasks.get(hi.model); if (!hi || !m) continue;
       const inv = inst.matrixWorld.clone().invert(); const lp = new Vector3();
@@ -585,29 +585,38 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const i0 = Math.max(0, Math.floor((bx0 - x0) / WX)), i1 = Math.min(wnx - 1, Math.ceil((bx1 - x0) / WX)), j0 = Math.max(0, Math.floor((bz0 - z0) / WX)), j1 = Math.min(wnz - 1, Math.ceil((bz1 - z0) / WX));
       for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
         lp.set(x0 + i * WX, 0, z0 + j * WX).applyMatrix4(inv); const r = indoorAt(m, lp.x, lp.z); const k = j * wnx + i;
+        if (lp.x > hi.fp[0] + 1.2 && lp.x < hi.fp[2] - 1.2 && lp.z > hi.fp[1] + 1.2 && lp.z < hi.fp[3] - 1.2) wbox[k] = 255;
         if (r.green) wgreen[k] = Number.isNaN(wgreen[k]) ? inst.position.y + r.greenFloor : Math.min(wgreen[k], inst.position.y + r.greenFloor);
         if (!r.inside) continue;
         wmask[k] = 255; wfloor[k] = Math.min(wfloor[k], inst.position.y + r.floor); // 255: текстура R8 нормирована, шейдер сравнивает с 0,5
       }
     }
     const indoorW = (x: number, z: number) => { const i = Math.round((x - x0) / WX), j = Math.round((z - z0) / WX); if (i < 0 || j < 0 || i >= wnx || j >= wnz) return null; const k = j * wnx + i; return wmask[k] ? wfloor[k] : null; };
+    // скрытая часть рельефа: интерьер ∪ габарит дома, кроме зелёных зон. Под домом рельеф не рисуется (discard) и не
+    // входит в коллайдер — игрок ходит по плитам модели; отметки земли там остаются площадкой, поэтому по границе
+    // пятна нет ни обрывов, ни «штырей»
+    const whide = new Uint8Array(wnx * wnz); for (let k = 0; k < wnx * wnz; k++) whide[k] = (wmask[k] || wbox[k]) && Number.isNaN(wgreen[k]) ? 255 : 0;
+    const hiddenW = (x: number, z: number) => { const i = Math.round((x - x0) / WX), j = Math.round((z - z0) / WX); if (i < 0 || j < 0 || i >= wnx || j >= wnz) return false; return whide[j * wnx + i] === 255; };
     // зелёные зоны плана (посадки у бассейна виллы 3 на нижнем уровне): газон на отметке своего уровня — не «бугор» верхнего рельефа
+    const greenCell = new Uint8Array(nx * nz);
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
       const x = x0 + i * step, z = z0 + j * step; const gi = Math.round((x - x0) / WX), gj = Math.round((z - z0) / WX); if (gi < 0 || gj < 0 || gi >= wnx || gj >= wnz) continue;
-      const gf = wgreen[gj * wnx + gi]; if (Number.isNaN(gf)) continue; const k = j * nx + i; h[k] = gf - 0.02; if (gradeFixed) gradeFixed[k] = 1;
+      const gf = wgreen[gj * wnx + gi]; if (Number.isNaN(gf)) continue; const k = j * nx + i; h[k] = gf - 0.02; greenCell[k] = 1; if (gradeFixed) gradeFixed[k] = 1;
     }
+    // граница зелёной зоны с уличным газоном другого уровня — откос в две клетки (посадочный склон), а не отвесная «пила»
     { const src = Float32Array.from(h);
-    for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
-      const x = x0 + i * step, z = z0 + j * step; const f = indoorW(x, z); if (f === null) continue;
-      const k = j * nx + i; if (gradeFixed) gradeFixed[k] = 1;
-      let deep = true; for (let a = 0; a < 8 && deep; a++) if (indoorW(x + Math.cos(a * Math.PI / 4) * 0.55, z + Math.sin(a * Math.PI / 4) * 0.55) === null) deep = false;
-      if (deep) { h[k] = Math.min(h[k], f - 0.05); continue; } // в глубине — ниже пола (скрыто маской)
-      // у грани (≤ 0,5 м): отметка соседней улицы, а не площадки — иначе у стен нижних уровней (вилла 3) вставали
-      // вертикальные треугольники рельефа высотой в этаж («штыри»); перепад к полу уходит внутрь маски
-      let sum = 0, cnt = 0; for (const n of [k - 1, k + 1, k - nx, k + nx]) { const xi = x0 + (n % nx) * step, zj = z0 + Math.floor(n / nx) * step; if (indoorW(xi, zj) === null) { sum += src[n]; cnt++; } }
-      if (cnt) h[k] = sum / cnt;
-    } }
-    { const tex = new DataTexture(wmask, wnx, wnz, RedFormat, UnsignedByteType); tex.minFilter = tex.magFilter = NearestFilter; tex.needsUpdate = true;
+      for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+        const k = j * nx + i; if (!greenCell[k]) continue;
+        let sum = 0, cnt = 0; for (const n of [k - 1, k + 1, k - nx, k + nx]) if (!greenCell[n] && !hiddenW(x0 + (n % nx) * step, z0 + Math.floor(n / nx) * step)) { sum += src[n]; cnt++; }
+        if (cnt) h[k] = (sum / cnt) * 0.65 + src[k] * 0.35; // первое кольцо — почти уличная отметка
+      }
+      const src2 = Float32Array.from(h);
+      for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+        const k = j * nx + i; if (!greenCell[k] || src2[k] !== src[k]) continue; // второе кольцо: зелёные клетки рядом с изменёнными
+        let sum = 0, cnt = 0; for (const n of [k - 1, k + 1, k - nx, k + nx]) if (greenCell[n] && src2[n] !== src[n]) { sum += src2[n]; cnt++; }
+        if (cnt) h[k] = (sum / cnt + src[k]) / 2;
+      } }
+    { const tex = new DataTexture(whide, wnx, wnz, RedFormat, UnsignedByteType); tex.minFilter = tex.magFilter = NearestFilter; tex.needsUpdate = true;
       INDOOR.tex.value = tex; INDOOR.i0.value.set(x0, z0); INDOOR.size.value.set((wnx - 1) * WX, (wnz - 1) * WX); INDOOR.has.value = 1; }
     // дорожка начинается перед дверью магазина (он сдвинут на 15 м, прежняя точка въезда оказалась внутри него) и обходит его
     const shopP = c.buildings.find((b) => b.model === 'shop'); const pose = shopP ? shopPose(shopP, houses, c.site.boundary) : null;
@@ -685,20 +694,29 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // берег лагуны не террасируем (естественный уклон к воде, песок, лотосы): клетки ближе 9 м к воде пропускаем —
       // перепад от площадок вилл 1.x к урезу (2,5 м на ~9 м) остаётся пологим газоном без стенок
       const nearWater = (x: number, z: number) => { for (const R of [3, 6, 9]) for (let a = 0; a < 8; a++) if (waterAt(x + Math.cos(a * Math.PI / 4) * R, z + Math.sin(a * Math.PI / 4) * R)) return true; return waterAt(x, z); };
-      const skipT = (x: number, z: number) => !inPoly(x, z, B) || nearWater(x, z) || (!!shopB && Math.hypot(x - shopB.pos[0], z - shopB.pos[1]) < 10);
+      const skipT = (x: number, z: number) => !inPoly(x, z, B) || nearWater(x, z) || hiddenW(x, z) || hiddenW(x + 1, z) || hiddenW(x - 1, z) || hiddenW(x, z + 1) || hiddenW(x, z - 1) || (!!shopB && Math.hypot(x - shopB.pos[0], z - shopB.pos[1]) < 10); // пятна домов (+1 м) не террасируем
       terr = planTerraces({ h, x0, z0, step, nx, nz }, relaxFixed, skipT, net, false); // лестницы — у дорожек (PathGrade), стенки у дорожек сходят на нет
       h.set(terr.h); relax(terr.fixed);
-      // цоколь под кромками наружных плит (входные террасы вилл 1.x подняты над склоном): там, где земля снаружи
-      // ниже опущенной под плиту клетки на 12+ см, между клетками ставится вертикальная штукатурная грань
+      // кромка скрытого пятна дома: клетки под домом, граничащие с улицей, берут уличную отметку — переходные треугольники
+      // на границе становятся плоскими (иначе «пила» там, где рельеф Revit под домом выше/ниже улицы)
+      { const src = Float32Array.from(h); const hid = (i: number, j: number) => hiddenW(x0 + i * step, z0 + j * step);
+        for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+          if (!hid(i, j)) continue; let sum = 0, cnt = 0;
+          for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) if (!hid(i + di, j + dj)) { sum += src[(j + dj) * nx + i + di]; cnt++; }
+          if (cnt) h[j * nx + i] = sum / cnt;
+        } }
+      // грани по границе пятна дома: где плита (терраса, крыльцо) выше земли снаружи — цоколь; где земля снаружи выше
+      // плиты (заглублённые террасы виллы 3) — подпорная грань. Между клеткой пятна с плитой и соседней уличной клеткой
       { const P: number[] = [], U: number[] = [];
         const quad = (ax: number, az: number, bx: number, bz: number, y0: number, y1: number) => { P.push(ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y0, az, bx, y1, bz, ax, y1, az); const L = Math.hypot(bx - ax, bz - az); U.push(0, y0, L, y0, L, y1, 0, y0, L, y1, 0, y1); };
         for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
-          const k = j * nx + i; if (!lowMask[k]) continue; const x = x0 + i * step, z = z0 + j * step;
+          const k = j * nx + i; if (!footMask[k] || Number.isNaN(slabTop[k])) continue; const x = x0 + i * step, z = z0 + j * step;
           for (const [n, dx, dz] of [[k + 1, 1, 0], [k - 1, -1, 0], [k + nx, 0, 1], [k - nx, 0, -1]] as [number, number, number][]) {
-            if (lowMask[n] || (indoorW(x0 + (n % nx) * step, z0 + Math.floor(n / nx) * step) !== null)) continue;
-            if (h[n] >= h[k] - 0.12) continue;
-            const mx = x + dx * step / 2, mz = z + dz * step / 2; // грань посередине между клетками, вдоль ребра
-            if (dx) quad(mx, mz - step / 2, mx, mz + step / 2, h[n] - 0.3, h[k] + 0.1); else quad(mx - step / 2, mz, mx + step / 2, mz, h[n] - 0.3, h[k] + 0.1);
+            if (hiddenW(x0 + (n % nx) * step, z0 + Math.floor(n / nx) * step)) continue; // сосед тоже под домом
+            const top = slabTop[k], ground = h[n]; if (Math.abs(top - ground) < 0.12) continue;
+            const y0 = Math.min(top, ground) - 0.3, y1 = Math.max(top, ground) + 0.05;
+            const mx = x + dx * step / 2, mz = z + dz * step / 2;
+            if (dx) quad(mx, mz - step / 2, mx, mz + step / 2, y0, y1); else quad(mx - step / 2, mz, mx + step / 2, mz, y0, y1);
           }
         }
         if (P.length) { const g = new BufferGeometry(); g.setAttribute('position', new Float32BufferAttribute(P, 3)); g.setAttribute('uv', new Float32BufferAttribute(U, 2)); g.computeVertexNormals(); skirtGeom = g; }
@@ -720,8 +738,12 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       }
       scol.set([cc.r, cc.g, cc.b], k * 3);
     }
-    const sidx: number[] = [];
-    for (let j = 0; j < nz - 1; j++) for (let i = 0; i < nx - 1; i++) { const a = j * nx + i; sidx.push(a, a + nx, a + 1, a + 1, a + nx, a + nx + 1); }
+    const sidx: number[] = []; const hideCell = new Uint8Array(nx * nz);
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) hideCell[j * nx + i] = hiddenW(x0 + i * step, z0 + j * step) ? 1 : 0;
+    for (let j = 0; j < nz - 1; j++) for (let i = 0; i < nx - 1; i++) {
+      const a = j * nx + i; const tri1 = [a, a + nx, a + 1], tri2 = [a + 1, a + nx, a + nx + 1]; // треугольники целиком под домом не нужны (ни рисовать, ни в коллайдер)
+      if (!tri1.every((v) => hideCell[v])) sidx.push(...tri1); if (!tri2.every((v) => hideCell[v])) sidx.push(...tri2);
+    }
     const sg = new BufferGeometry(); sg.setAttribute('position', new BufferAttribute(sp, 3)); sg.setAttribute('uv', new BufferAttribute(su, 2));
     sg.setAttribute('color', new BufferAttribute(scol, 3)); sg.setIndex(sidx); sg.computeVertexNormals();
     // окрестности: сетка 20 м в квадрате ±2 км; вода — ниже уровня; внутри участка — под ним
@@ -830,7 +852,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       if (!inPoly(x, z, c.site.boundary) || waterAt(x, z) || distToPaths(net, x, z) < 1.3) return false;
       if (terr) { const ti = Math.round((x - x0) / step), tj = Math.round((z - z0) / step); if (ti >= 0 && tj >= 0 && ti < nx && tj < nz && terr.mask[tj * nx + ti]) return false; }
       if (shopB && Math.hypot(x - shopB.pos[0], z - shopB.pos[1]) < 8.5) return false;
-      if (indoorW(x, z) !== null) return false;
+      if (hiddenW(x, z)) return false;
       for (const { m, fp } of hpInv) { lpG.set(x, 0, z).applyMatrix4(m); if (lpG.x > fp[0] - 0.3 && lpG.x < fp[2] + 0.3 && lpG.z > fp[1] - 0.3 && lpG.z < fp[3] + 0.3) return false; }
       return true;
     };
