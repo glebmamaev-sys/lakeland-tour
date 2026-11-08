@@ -418,7 +418,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
       }
       let gi = 0;
       for (const sp of chosen.slice(0, 12)) {
-        const mk = (x: number, z: number, yaw: number, anim: Idler['anim']) => { const id = GUEST_IDS[(gi * 5 + 2) % GUEST_IDS.length]; gi++; standing.push({ h: makeSkinnedHuman(charOf(id), id.startsWith('f_'), 950 + gi), x, y: sp.y, z, yaw, cur: yaw, greet: 0, cool: 0, role: 'guest', anim }); };
+        const mk = (x: number, z: number, yaw: number, anim: Idler['anim']) => { const id = GUEST_IDS[(gi * 3 + 1) % GUEST_IDS.length]; gi++; /* шаг 3 взаимно прост с длиной списка (5) — соседи разные */ standing.push({ h: makeSkinnedHuman(charOf(id), id.startsWith('f_'), 950 + gi), x, y: sp.y, z, yaw, cur: yaw, greet: 0, cool: 0, role: 'guest', anim }); };
         if (sp.kind === 'sit') mk(sp.x, sp.z, sp.yaw, 'sit');
         else if (rt() < 0.45) { const px = Math.cos(sp.yaw), pz = -Math.sin(sp.yaw); mk(sp.x - px * 0.42, sp.z - pz * 0.42, sp.yaw + 0.75, 'idle'); mk(sp.x + px * 0.42, sp.z + pz * 0.42, sp.yaw - 0.75, 'idle2'); } // пара беседует, глядя на вид
         else mk(sp.x, sp.z, sp.yaw, rt() < 0.5 ? 'idle' : 'idle2');
