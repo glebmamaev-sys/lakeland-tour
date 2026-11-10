@@ -198,6 +198,7 @@ function furnishBedroom(p: Placer, r: RoomInfo, seed: number) {
   // два прохода: сначала изголовьем к подтверждённой лучом стене; если стен не нашлось (контур комнаты шире реальных
   // стен, ниша, перегородка-стекло) — к наименее остеклённой стороне без проверки луча. Спальня без кровати хуже
   // кровати у перегородки; пересечения, проёмы и препятствия модели проверяет put() в обоих проходах
+  let byWall = true;
   for (const needWall of [true, false]) {
     for (const side of order) {
       if (r.glass[side] > 0.6 || sideLen(r.rect, side) < (needWall ? 2.4 : 2.0) || depth(r.rect, side) < (needWall ? 2.7 : 2.5)) continue;
@@ -206,10 +207,10 @@ function furnishBedroom(p: Placer, r: RoomInfo, seed: number) {
       for (const along of [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8]) { w = nearWall(r.rect, side, 1.15, along); if (p.put(bedG, w.x, w.z, yaw, bedW + 0.1, 2.2)) { placed = true; break; } }
       if (placed) break;
     }
-    if (placed) break;
+    if (placed) { byWall = needWall; break; }
   }
   if (!placed) return;
-  (p as unknown as { note: string }).note = 'bed@' + solid;
+  (p as unknown as { note: string }).note = (byWall ? 'bed@' : 'bed~') + solid; // bed~ — без подтверждённой лучом стены (для автопроверки)
   const t = new Vector3(-w.n.z, 0, w.n.x); // вдоль стены
   for (const s of [-1, 1]) {
     const bx = w.x + t.x * s * (bedW / 2 + 0.4) - w.n.x * 0.7, bz = w.z + t.z * s * (bedW / 2 + 0.4) - w.n.z * 0.7;

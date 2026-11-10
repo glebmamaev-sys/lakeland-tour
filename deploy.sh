@@ -15,6 +15,13 @@ echo "→ сборка под $BASE"
 VITE_BASE="$BASE" npm run build >/dev/null
 touch dist/.nojekyll
 
+# автопроверка собранной сцены (scripts/smoke.mjs): жёсткие правила + сравнение с эталоном; при провале выкладки нет.
+# Принять ожидаемые изменения: npm run smoke -- --update. Обойти в крайнем случае: SKIP_SMOKE=1 ./deploy.sh
+if [ -z "${SKIP_SMOKE:-}" ]; then
+  echo "→ автопроверка сцены"
+  node scripts/smoke.mjs || { echo "✗ выкладка остановлена: автопроверка не пройдена"; exit 1; }
+fi
+
 if ! git remote get-url origin >/dev/null 2>&1; then
   echo "→ создаю публичный репозиторий $OWNER/$REPO и пушу исходники"
   gh repo create "$REPO" --public --source=. --remote=origin --push \

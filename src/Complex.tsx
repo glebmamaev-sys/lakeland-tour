@@ -5,6 +5,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useThree } from '@react-three/fiber';
 import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
+  CatmullRomCurve3,
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, ExtrudeGeometry,
   Float32BufferAttribute, Group, LOD, Matrix4, Mesh, MeshStandardMaterial, type Object3D,
   Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3, type Intersection,
@@ -665,6 +666,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const net = buildPathNetwork(houses, pose ? pose.door : (WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]),
       pose ? { x: pose.pos[0], z: pose.pos[1], r: pose.r, toward: WALK_SPAWN_XZ } : undefined, houses.map((hh) => ({ x: hh.entry[0], z: hh.entry[2], yaw: hh.entryYaw })),
       (x, z) => indoorW(x, z) !== null || pools.some((b) => x > b.min.x - 1.0 && x < b.max.x + 1.0 && z > b.min.z - 1.0 && z < b.max.z + 1.0)); // «дом» для дорожек — маска стен и комнат (до террас дорожки доходят) и бассейны с бортом 1 м
+    // автопроверка (scripts/smoke.mjs): точки осей дорожек (шаг 0,5 м) внутри маски комнат и внутри бассейнов — должно быть 0
+    const pathCheck = { pts: 0, inHouse: 0, inPool: 0 };
+    for (const line of net.lines) { if (line.length < 2) continue; const cv = new CatmullRomCurve3(line, false, 'catmullrom', 0.3); const np = Math.max(2, Math.ceil(cv.getLength() / 0.5));
+      for (const q of cv.getSpacedPoints(np)) { pathCheck.pts++; if (indoorW(q.x, q.z) !== null) pathCheck.inHouse++; if (pools.some((b) => q.x > b.min.x && q.x < b.max.x && q.z > b.min.z && q.z < b.max.z)) pathCheck.inPool++; } }
     let terr: Terraces | null = null; let graded: Graded | null = null; let skirtGeom: BufferGeometry | null = null;
     // под магазином земля не выше его пола: пол ставится по отметке у двери (+0,12), цоколь 1,8 м прячет перепад;
     // пятно магазина опускается на 0,5 м ниже отметки у двери и фиксируется, пятачок у двери фиксируется как есть
@@ -901,7 +906,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
     const builtNow = { site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
-    (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length };
+    (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, pathCheck, pathLines: net.lines.length };
   }, [data, instances, houses]);
 
   // коллайдер всего комплекса: дома (с проёмами дверей в системе координат каждого дома, без растений и штор),
