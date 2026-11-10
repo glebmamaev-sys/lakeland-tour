@@ -195,11 +195,17 @@ function furnishBedroom(p: Placer, r: RoomInfo, seed: number) {
   const order = SIDES.slice().sort((a, b) => r.glass[a] - r.glass[b] || sideLen(r.rect, b) - sideLen(r.rect, a));
   let solid: Side = order[0], bedW = 1.5, yaw = 0, w = nearWall(r.rect, solid, 1.15), placed = false;
   // платформы кроватей Revit убраны (clearBeds) — кровать всегда у глухой стены
-  for (const side of order) {
-    if (r.glass[side] > 0.6 || sideLen(r.rect, side) < 2.4 || depth(r.rect, side) < 2.7) continue;
-    { const wp = nearWall(r.rect, side, 0.3); if (!p.wallAt(wp.x, wp.z, wp.n)) continue; } // за изголовьем должна быть стена
-    solid = side; bedW = sideLen(r.rect, side) > 3.6 ? 1.8 : 1.5; yaw = yawTo(inward(side)); const bedG = F.bed(bedW, 2.1);
-    for (const along of [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8]) { w = nearWall(r.rect, side, 1.15, along); if (p.put(bedG, w.x, w.z, yaw, bedW + 0.1, 2.2)) { placed = true; break; } }
+  // два прохода: сначала изголовьем к подтверждённой лучом стене; если стен не нашлось (контур комнаты шире реальных
+  // стен, ниша, перегородка-стекло) — к наименее остеклённой стороне без проверки луча. Спальня без кровати хуже
+  // кровати у перегородки; пересечения, проёмы и препятствия модели проверяет put() в обоих проходах
+  for (const needWall of [true, false]) {
+    for (const side of order) {
+      if (r.glass[side] > 0.6 || sideLen(r.rect, side) < (needWall ? 2.4 : 2.0) || depth(r.rect, side) < (needWall ? 2.7 : 2.5)) continue;
+      if (needWall) { const wp = nearWall(r.rect, side, 0.3); if (!p.wallAt(wp.x, wp.z, wp.n)) continue; } // за изголовьем должна быть стена
+      solid = side; bedW = sideLen(r.rect, side) > 3.6 ? 1.8 : 1.5; yaw = yawTo(inward(side)); const bedG = F.bed(bedW, 2.1);
+      for (const along of [0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8]) { w = nearWall(r.rect, side, 1.15, along); if (p.put(bedG, w.x, w.z, yaw, bedW + 0.1, 2.2)) { placed = true; break; } }
+      if (placed) break;
+    }
     if (placed) break;
   }
   if (!placed) return;
