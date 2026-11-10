@@ -83,7 +83,7 @@ const COLLECT = `(() => {
   const floors = {}; for (const k of Object.keys(F).sort()) floors[k] = +F[k].topo.toFixed(2);
   let renderer = ''; try { const gl = window.__gl.getContext(); const e = gl.getExtension('WEBGL_debug_renderer_info'); renderer = e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : ''; } catch {}
   return { buildings: c.data.buildings.map((b) => b.id + ':' + b.model), houses: c.houses.length, floors, rooms, path: c.pathCheck, pathLines: c.pathLines,
-    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer, dup };
+    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer, dup, gate: c.gate ?? null };
 })()`;
 
 /** Плоский список расхождений двух значений (эталон → сейчас). */
@@ -129,13 +129,14 @@ async function main() {
     const entries = {}, strips = {}; let pads = null;
     for (const l of logs) {
       let m;
-      if ((m = l.match(/^\[entry\] (\S+) (\S+) (.*)$/))) entries[`${m[1]},${m[2]}`] = m[3].replace(/[\d.]+ м/, '').trim();
+      // «[entry] x z тропинка…» (вход по точке телепорта) или «[entry] 2.1 подход 17.1 м, 3 точек» (парадный вход, ворота)
+      if ((m = l.match(/^\[entry\] (\S+) (\S+) (.*)$/))) { if (/^-?[\d.]+$/.test(m[2])) entries[`${m[1]},${m[2]}`] = m[3].replace(/[\d.]+ м/, '').trim(); else entries[m[1]] = (m[2] + ' ' + m[3]).replace(/[\d.]+ м,? ?/, '').replace(/\d+ точек/, '').trim(); }
       else if ((m = l.match(/^\[(stairs|bath|beds)\] (villa\w+) убрано компонентов: (\d+) из мешей: (\d+)/))) strips[`${m[2]}.${m[1]}.компонентов`] = Number(m[3]);
       else if ((m = l.match(/^\[(bath|beds)\] (villa\w+) срезано треугольников[^:]*: (\d+)/))) strips[`${m[2]}.${m[1]}.срезано`] = Number(m[3]);
       else if ((m = l.match(/^\[pads\] .*: (\d+)$/))) pads = Number(m[1]);
     }
     const snapshot = data && { floors: data.floors, rooms: data.rooms, path: data.path, pathLines: data.pathLines, flights: data.flights, steps: data.steps, walls: data.walls,
-      lotus: data.lotus, entries, strips: Object.fromEntries(Object.entries(strips).sort()), pads };
+      lotus: data.lotus, gate: data.gate, entries, strips: Object.fromEntries(Object.entries(strips).sort()), pads };
     const baseline = existsSync(BASELINE) ? JSON.parse(await readFile(BASELINE, 'utf8')) : null;
 
     // жёсткие правила
@@ -148,6 +149,8 @@ async function main() {
       const all = Object.entries(data.rooms).flatMap(([v, list]) => list.map((r) => `${v}: ${r}`));
       const noBed = all.filter((r) => / bedroom@/.test(r) && !/ bed[@~]/.test(r));
       check(`кровать в каждой спальне (${all.filter((r) => / bedroom@/.test(r)).length})`, noBed.length === 0, noBed.join('\n      '));
+      const noWay = Object.entries(entries).filter(([, v]) => /не найден|не провести/.test(v)).map(([k, v]) => `${k}: ${v}`);
+      check('ко всем входам и к воротам проложен подход', !!data.gate && noWay.length === 0, data.gate ? noWay.join('\n      ') : 'ворот нет');
       check('нет комнат-дублей (одна комната не обставлена дважды)', (data.dup ?? []).length === 0, (data.dup ?? []).join('\n      '));
       check(`оси дорожек не идут через дома и бассейны (${data.path?.pts ?? 0} точек)`, !!data.path && data.path.inHouse === 0 && data.path.inPool === 0, data.path ? `в домах ${data.path.inHouse}, в бассейнах ${data.path.inPool}` : 'нет данных');
       if (baseline && !UPDATE) {

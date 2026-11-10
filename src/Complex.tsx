@@ -25,6 +25,7 @@ import { furnishVilla, glassBoxes, waterBoxes, roomRects, stairFlights, type Ter
 import type { IdlerSpec } from './world/Characters';
 import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
+import { buildEntrance, planGate, type Gate } from './world/Entrance';
 import { Grass } from './world/Grass';
 import { planTerraces, wallGeometry, type Terraces } from './world/Terraces';
 import { gradePaths, stepGeometry, type Graded } from './world/PathGrade';
@@ -86,7 +87,7 @@ const placePalmShort = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r *
 const placeBush = (p: Plant) => ({ x: p.x, y: p.y + 0.1, z: p.z, yaw: p.r * 6.28, height: 0.7 + p.s * 0.9 });
 const placeTree = (p: Plant) => ({ x: p.x, y: p.y + 0.05, z: p.z, yaw: p.r * 6.28, height: 4 + p.s * 2.5 });
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
-type BuiltScene = { site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
+type BuiltScene = { entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
@@ -680,11 +681,20 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       INDOOR.tex.value = tex; INDOOR.i0.value.set(x0, z0); INDOOR.size.value.set((wnx - 1) * WX, (wnz - 1) * WX); INDOOR.has.value = 1; }
     // дорожка начинается перед дверью магазина (он сдвинут на 15 м, прежняя точка въезда оказалась внутри него) и обходит его
     const shopP = c.buildings.find((b) => b.model === 'shop'); const pose = shopP ? shopPose(shopP, houses, c.site.boundary) : null;
+    // магазин — тоже препятствие для дорожек (пятно с полем 0,8 м): подход от ворот идёт мимо него
+    const shopHit = (x: number, z: number) => { if (!pose) return false; const cs = Math.cos(pose.yaw), sn = Math.sin(pose.yaw); const lx = (x - pose.pos[0]) * cs - (z - pose.pos[1]) * sn, lz = (x - pose.pos[0]) * sn + (z - pose.pos[1]) * cs; return Math.abs(lx) < pose.W / 2 + 0.8 && Math.abs(lz) < pose.D / 2 + 0.8; };
+    const pathBlocked = (x: number, z: number) => indoorW(x, z) !== null || shopHit(x, z) || pools.some((b) => x > b.min.x - 1.0 && x < b.max.x + 1.0 && z > b.min.z - 1.0 && z < b.max.z + 1.0);
+    // въезд: ворота на сухопутной границе у ресепшена (Entrance.ts); суша — по высотам окрестностей и маске воды
+    const landRaw = demSampler({ ...c, dem: { ...c.dem, n: c.dem.land_n, step: (2 * c.dem.half) / (c.dem.land_n - 1) } }, land);
+    const isLand = (x: number, z: number) => !waterAt(x, z) && landRaw(x, z) > c.water_level + 0.8;
+    const gate: Gate | null = pose ? planGate(c.site.boundary, pathBlocked, isLand, pose.door, c.osm.roads) : null;
+    console.info('[entrance]', gate ? `ворота в (${gate.x.toFixed(1)}, ${gate.z.toFixed(1)}), наружу (${gate.nx.toFixed(2)}, ${gate.nz.toFixed(2)})` : 'места для ворот нет');
     const net = buildPathNetwork(houses, pose ? pose.door : (WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]),
       pose ? { x: pose.pos[0], z: pose.pos[1], r: pose.r, toward: WALK_SPAWN_XZ } : undefined, houses.map((hh) => ({ x: hh.entry[0], z: hh.entry[2], yaw: hh.entryYaw })),
-      (x, z) => indoorW(x, z) !== null || pools.some((b) => x > b.min.x - 1.0 && x < b.max.x + 1.0 && z > b.min.z - 1.0 && z < b.max.z + 1.0)); // «дом» для дорожек — маска стен и комнат (до террас дорожки доходят) и бассейны с бортом 1 м
+      pathBlocked, { blocked: pathBlocked, inside: (x, z) => inPoly(x, z, c.site.boundary), height: siteSampler(c, h), bbox: [x0, z0, x0 + (nx - 1) * step, z0 + (nz - 1) * step] }, gate ? [gate.x - gate.nx * 2.2, gate.z - gate.nz * 2.2] : undefined); // «дом» для дорожек — маска стен и комнат (до террас дорожки доходят) и бассейны с бортом 1 м
     // автопроверка (scripts/smoke.mjs): точки осей дорожек (шаг 0,5 м) внутри маски комнат и внутри бассейнов — должно быть 0
     const pathCheck = { pts: 0, inHouse: 0, inPool: 0 };
+    (window as unknown as { __pathDbg: unknown }).__pathDbg = { lines: net.lines.map((l) => l.map((q) => [+q.x.toFixed(2), +q.z.toFixed(2)])), blocked: (x: number, z: number) => indoorW(x, z) !== null, pool: (x: number, z: number) => pools.some((b) => x > b.min.x - 1.0 && x < b.max.x + 1.0 && z > b.min.z - 1.0 && z < b.max.z + 1.0), door: pose ? pose.door : null };
     for (const line of net.lines) { if (line.length < 2) continue; const cv = new CatmullRomCurve3(line, false, 'catmullrom', 0.3); const np = Math.max(2, Math.ceil(cv.getLength() / 0.5));
       for (const q of cv.getSpacedPoints(np)) { pathCheck.pts++; if (indoorW(q.x, q.z) !== null) pathCheck.inHouse++; if (pools.some((b) => q.x > b.min.x && q.x < b.max.x && q.z > b.min.z && q.z < b.max.z)) pathCheck.inPool++; } }
     let terr: Terraces | null = null; let graded: Graded | null = null; let skirtGeom: BufferGeometry | null = null;
@@ -840,6 +850,14 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       if (inGrid(x, z, 0)) { const g = siteAt(x, z); if (g !== null) return g; } // суша в сетке участка вне его границы (берег)
       return raw;
     };
+    // въезд: парковка, подъездная дорога, ограда и ворота. За границей участка рисуется сетка окрестностей с шагом 10 м
+    // (треугольники), а heightAt отдаёт билинейную высоту мелкой сетки — они расходятся на дециметры; ленты кладём
+    // на большее из двух, иначе асфальт местами уходил бы под траву
+    const drawnAt = (x: number, z: number) => { const fx = (x + half) / st, fz = (z + half) / st; const i = Math.max(0, Math.min(N - 2, Math.floor(fx))), j = Math.max(0, Math.min(N - 2, Math.floor(fz))); const u = fx - i, v = fz - j;
+      const ya = dp[(j * N + i) * 3 + 1], yb = dp[(j * N + i + 1) * 3 + 1], yc = dp[((j + 1) * N + i) * 3 + 1], yd = dp[((j + 1) * N + i + 1) * 3 + 1];
+      return u + v <= 1 ? ya + (yb - ya) * u + (yc - ya) * v : yd + (yc - yd) * (1 - u) + (yb - yd) * (1 - v); };
+    const hOut = (x: number, z: number) => { const s = heightAt(x, z); if (s === null) return null; return inPoly(x, z, c.site.boundary) || inGrid(x, z, 0) ? s : Math.max(s, drawnAt(x, z)); };
+    const entrance = gate ? buildEntrance(gate, c.site.boundary, hOut, isLand, c.osm.roads) : null;
     // соседние дома (OSM): коробки 4 м с плоской крышей
     const hg: BufferGeometry[] = [];
     for (const poly of c.osm.buildings) {
@@ -876,7 +894,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       if (r() > pKeep) continue;
       if (inPoly(px, pz, c.site.boundary)) continue;
       const y = heightAt(px, pz); if (y === null) continue;
-      (Math.hypot(px, pz) < 260 ? near : far).push({ x: px, y: y - 0.2, z: pz, s: r(), r: r() });
+      const ps = r(), pr = r(); if (entrance?.keepOut(px, pz)) continue; // на парковке и подъездной дороге пальм нет (случайный ряд не сдвигается)
+      (Math.hypot(px, pz) < 260 ? near : far).push({ x: px, y: y - 0.2, z: pz, s: ps, r: pr });
     }
     for (let k = 0; k < 900; k++) {
       const px = -95 + r() * 190, pz = -75 + r() * 150;
@@ -921,9 +940,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       return true;
     };
     (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
-    const builtNow = { site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
+    const builtNow = { entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
-    (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, pathCheck, pathLines: net.lines.length };
+    (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
   }, [data, instances, houses]);
 
   // коллайдер всего комплекса: дома (с проёмами дверей в системе координат каждого дома, без растений и штор),
@@ -1030,6 +1049,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     return new MeshStandardMaterial({ map: t, color: '#cfc6b4', roughness: 0.95, side: DoubleSide }); }, [tex.wallstone]);
   const stepMat = useMemo(() => { const t = tex.stone2.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.needsUpdate = true;
     return new MeshStandardMaterial({ map: t, color: '#c9c2b2', roughness: 0.9 }); }, [tex.stone2]);
+  // въезд: гравийное покрытие парковки и подъездной дороги (тот же камень, темнее и крупнее) и «твёрдое» — ограда, ворота, машины (цвет по вершинам)
+  const driveMat = useMemo(() => { const t = tex.stone2.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.repeat.set(1, 1); t.needsUpdate = true;
+    return new MeshStandardMaterial({ map: t, color: '#8f8a80', roughness: 0.95, side: DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }); }, [tex.stone2]);
+  const entranceMat = useMemo(() => new MeshStandardMaterial({ vertexColors: true, roughness: 0.82, side: DoubleSide }), []);
   const pathMat = useMemo(() => { const t = tex.stone2.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.repeat.set(1, 1); t.needsUpdate = true;
     return new MeshStandardMaterial({ map: t, color: '#d8d2c4', roughness: 0.9, side: DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }); }, [tex.stone2]);
 
@@ -1059,6 +1082,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
             <mesh geometry={built.dem} material={demMat} receiveShadow />
             {built.houses && <mesh geometry={built.houses} material={[roofMat, wallMat]} castShadow receiveShadow />}
             {built.paths && <mesh geometry={built.paths} material={pathMat} receiveShadow />}
+            {built.entrance?.paved && <mesh geometry={built.entrance.paved} material={driveMat} receiveShadow />}
+            {built.entrance?.solid && <mesh geometry={built.entrance.solid} material={entranceMat} castShadow receiveShadow />}
             {built.walls && <mesh geometry={built.walls} material={retMat} castShadow receiveShadow />}
             {built.skirt && <mesh geometry={built.skirt} material={skirtMat} receiveShadow />}
             {built.cheeks && <mesh geometry={built.cheeks} material={retMat} castShadow receiveShadow />}
