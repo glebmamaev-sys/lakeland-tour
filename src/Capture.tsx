@@ -257,6 +257,7 @@ export function Capture() {
       runComplex: (villa: string, houseId: string, only?: string[], prefix?: string) => runShotlistComplex(gl, scene, camera as PerspectiveCamera, villa, houseId, only, prefix),
     };
     (window as unknown as { __capture: unknown }).__capture = api;
+    (window as unknown as { __scene: unknown }).__scene = scene; // отладка и автопроверка: разбор нагрузки по объектам
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat) return;
       if (e.code === 'KeyP') api.pano();

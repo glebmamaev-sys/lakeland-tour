@@ -26,6 +26,7 @@ import type { IdlerSpec } from './world/Characters';
 import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
 import { buildEntrance, planGate, type Gate } from './world/Entrance';
+import { mergeByMaterial } from './world/MergeLod';
 import { Grass } from './world/Grass';
 import { planTerraces, wallGeometry, type Terraces } from './world/Terraces';
 import { gradePaths, stepGeometry, type Graded } from './world/PathGrade';
@@ -80,6 +81,11 @@ const INDOOR = { tex: { value: null as DataTexture | null }, i0: { value: new Ve
 /** Точка старта пешей прогулки: у въезда рядом с магазином, взгляд на ряд вилл. */
 const WALK_SPAWN_XZ: [number, number] = [-36, -34];
 const LOD_FAR = 65;
+// третий уровень: самая лёгкая копия (<villa>_far.glb, ~12 % треугольников, текстуры 64 px) — вид с дрона и дальние планы
+const LOD_FAR2 = 170;
+// телефон: полная модель только вблизи (до 30 м), средняя копия — узкой полосой до 55 м, дальше сразу самая лёгкая:
+// на экране шириной 375–430 px разницы не видно, а упрощённые копии были главным потребителем (1,4 млн из 2,2)
+const LOD_MOBILE: [number, number] = [30, 55];
 const PROVEG = new URLSearchParams(location.search).has('proveg'); // процедурная растительность вместо моделей Kenney
 // расстановка моделей растений: высота в метрах, поворот и наклон из параметров Plant (s, r)
 const placePalm = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r * 6.28, height: 8 + p.s * 6, lean: (p.r - 0.5) * 0.18, leanDir: p.s * 6.28 });
@@ -294,6 +300,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
   const gltfs = MODEL_IDS.map((id) => useGLTF(asset(MODELS[id].url)));
   // упрощённые копии (gltf-transform simplify, ~25 % треугольников) для домов дальше LOD_FAR: без теней и коллизий
   const lows = MODEL_IDS.map((id) => useGLTF(asset(MODELS[id].url.replace('.glb', '_low.glb'))));
+  const fars = MODEL_IDS.map((id) => useGLTF(asset(MODELS[id].url.replace('.glb', '_far.glb'))));
   const tex = useTexture({
     grass: asset('textures/grass.jpg'),
     slats: asset('textures/slats.jpg'), slatsN: asset('textures/slats_n.webp'),
@@ -362,7 +369,16 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         low.rotation.set(...cfg0.rotation); low.position.set(...cfg0.offset); low.updateMatrixWorld(true);
         applyMaterialRules(low, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint });
         low.traverse((o) => { const m = o as Mesh; if (m.isMesh) { m.userData.noCollide = true; m.castShadow = false; m.receiveShadow = false; } });
+        const mg = mergeByMaterial(low); console.info('[lod]', MODEL_IDS[k], 'упрощённая копия: мешей', mg[0], '→', mg[1]);
         low.userData.prepared = true;
+      }
+      const far = fars[k].scene;
+      if (!far.userData.prepared) {
+        far.rotation.set(...cfg0.rotation); far.position.set(...cfg0.offset); far.updateMatrixWorld(true);
+        applyMaterialRules(far, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint });
+        far.traverse((o) => { const m = o as Mesh; if (m.isMesh) { m.userData.noCollide = true; m.castShadow = false; m.receiveShadow = false; } });
+        const mg = mergeByMaterial(far); console.info('[lod]', MODEL_IDS[k], 'дальняя копия: мешей', mg[0], '→', mg[1]);
+        far.userData.prepared = true;
       }
       if (!groundBVH.current.has(MODEL_IDS[k])) {
         const gc = buildColliderFromParts(collectColliderParts(g.scene, [], undefined, (m) => m.userData.role !== 'ground' && m.userData.role !== 'terrain'));
@@ -380,7 +396,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const innerLow = lows[k].scene.clone(true);
       innerLow.rotation.set(...cfg.rotation); innerLow.position.set(...cfg.offset);
       const outer = new Group(); outer.name = `house-${b.id}`;
-      const lod = new LOD(); lod.name = 'lod'; lod.addLevel(inner, 0); lod.addLevel(innerLow, LOD_FAR);
+      const innerFar = fars[k].scene.clone(true);
+      innerFar.rotation.set(...cfg.rotation); innerFar.position.set(...cfg.offset);
+      const [d1, d2] = input.mobile ? LOD_MOBILE : [LOD_FAR, LOD_FAR2];
+      const lod = new LOD(); lod.name = 'lod'; lod.addLevel(inner, 0); lod.addLevel(innerLow, d1, 0.06); lod.addLevel(innerFar, d2, 0.06); // гистерезис 6 %: уровни не мигают на границе
       outer.add(lod); outer.rotation.y = -b.rot; outer.position.set(b.pos[0], b.floor, b.pos[1]);
       outer.updateMatrixWorld(true);
       // футпринт дома в координатах модели: по мешам не больше 32 м (большие меши — участок вместе с плитами)
@@ -420,10 +439,11 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       floorTopo += FLOOR_ADJ[b.id] ?? 0;
       floorsTopo[b.id] = { plan: bb.floorPlan, topo: +floorTopo.toFixed(2) };
       b.floor = floorTopo;
-      for (const root of [inner, innerLow]) root.traverse((o) => {
+      for (const root of [inner, innerLow, innerFar]) root.traverse((o) => {
         const m = o as Mesh; if (!m.isMesh) return;
         const role = m.userData.role;
         if (role === 'ground' || role === 'terrain') { m.visible = false; m.userData.noCollide = true; return; }
+        if (m.userData.merged) return; // склеенные меши дальних копий: крупные (площадка участка) в склейку не попадают
         tmp.setFromObject(m); const sz = tmp.getSize(new Vector3());
         if (Math.max(sz.x, sz.z) <= 32) return;
         m.geometry = keepInside(m, fp); // оставляем плиты и стены дома, площадку участка отрезаем

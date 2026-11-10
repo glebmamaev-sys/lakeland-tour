@@ -1,5 +1,6 @@
 // Процедурная растительность комплекса: кокосовые пальмы с перистыми листьями (ближние) и простые (дальние),
 // кусты вдоль домов и на газоне, франжипани у дорожек. Всё инстансами: несколько вызовов отрисовки на тысячи растений.
+import { input } from '../input';
 import { useEffect, useMemo, useRef } from 'react';
 import {
   BufferAttribute, BufferGeometry, Color, CylinderGeometry, DoubleSide, IcosahedronGeometry,
@@ -80,8 +81,9 @@ export function makeSimpleCrown(): BufferGeometry {
   return mergeGeometries(leaves)!;
 }
 
-export function makeTrunk(): BufferGeometry {
-  const g = new CylinderGeometry(0.13, 0.22, 1, 7, 6); g.translate(0, 0.5, 0);
+/** Ствол пальмы; lite — для дальних (5 граней, 2 пояса, без торцов: 20 треугольников вместо 98). */
+export function makeTrunk(lite = false): BufferGeometry {
+  const g = lite ? new CylinderGeometry(0.13, 0.22, 1, 5, 2, true) : new CylinderGeometry(0.13, 0.22, 1, 7, 6); g.translate(0, 0.5, 0);
   // лёгкий изгиб ствола и кольца
   const p = g.getAttribute('position') as BufferAttribute;
   for (let i = 0; i < p.count; i++) { const y = p.getY(i); p.setX(i, p.getX(i) + 0.12 * y * y); }
@@ -120,7 +122,7 @@ export function makeFrangipani(seed = 1): BufferGeometry {
 const leafMat = new MeshStandardMaterial({ vertexColors: true, roughness: 0.85, side: DoubleSide });
 const solidMat = new MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
 
-function Instanced({ geometry, material, items, place }: { geometry: BufferGeometry; material: MeshStandardMaterial; items: Plant[]; place: (p: Plant, m: Matrix4) => void }) {
+function Instanced({ geometry, material, items, place, shadow = true }: { geometry: BufferGeometry; material: MeshStandardMaterial; items: Plant[]; place: (p: Plant, m: Matrix4) => void; shadow?: boolean }) {
   const ref = useRef<InstancedMesh>(null);
   useEffect(() => {
     if (!ref.current || !items.length) return; // пустой список: меш не рендерится, ref нет
@@ -128,12 +130,15 @@ function Instanced({ geometry, material, items, place }: { geometry: BufferGeome
     ref.current!.instanceMatrix.needsUpdate = true; ref.current!.computeBoundingSphere();
   }, [items, place]);
   if (!items.length) return null;
-  return <instancedMesh ref={ref} args={[geometry, material, items.length]} castShadow receiveShadow frustumCulled={false} />;
+  return <instancedMesh ref={ref} args={[geometry, material, items.length]} castShadow={shadow} receiveShadow={shadow} frustumCulled={false} />;
 }
 
 /** Пальмы: ближние (детальная крона) и дальние (простая); у каждой свой наклон и размер. */
 export function Palms({ near, far }: { near: Plant[]; far: Plant[] }) {
-  const trunk = useMemo(() => makeTrunk(), []);
+  const trunk = useMemo(() => makeTrunk(), []), trunkLite = useMemo(() => makeTrunk(true), []);
+  // дальние пальмы окрестностей (их ~16 тысяч до 1,5 км): лёгкий ствол, без теней (карта теней покрывает только участок),
+  // дальше 700 м — примерно каждая вторая. Раньше они давали половину всех треугольников кадра, считая проход теней
+  const farLite = useMemo(() => far.filter((p) => { const d = Math.hypot(p.x, p.z); return input.mobile ? d < 450 || (d < 900 && p.s < 0.35) : d < 700 || p.s < 0.55; }), [far]); // телефон: до 900 м и реже
   const crownA = useMemo(() => makePalmCrown(3), []), crownB = useMemo(() => makePalmCrown(9, 11), []);
   const simple = useMemo(() => makeSimpleCrown(), []);
   const nearA = useMemo(() => near.filter((_, i) => i % 2 === 0), [near]), nearB = useMemo(() => near.filter((_, i) => i % 2 === 1), [near]);
@@ -141,10 +146,11 @@ export function Palms({ near, far }: { near: Plant[]; far: Plant[] }) {
   const placeCrown = (p: Plant, m: Matrix4) => { const h = 7 + p.s * 7; const lean = (p.r - 0.5) * 0.25; const q = new Quaternion().setFromAxisAngle(new Vector3(Math.cos(p.r * 6.28), 0, Math.sin(p.r * 6.28)), lean); const top = new Vector3(0.12 * h, h, 0).applyQuaternion(q).add(new Vector3(p.x, p.y, p.z)); const s = 0.9 + p.s * 0.4; m.compose(top, new Quaternion().setFromAxisAngle(up, p.r * 6.28), new Vector3(s, s, s)); };
   return (
     <>
-      <Instanced geometry={trunk} material={solidMat} items={[...near, ...far]} place={placeTrunk} />
+      <Instanced geometry={trunk} material={solidMat} items={near} place={placeTrunk} />
+      <Instanced geometry={trunkLite} material={solidMat} items={farLite} place={placeTrunk} shadow={false} />
       <Instanced geometry={crownA} material={leafMat} items={nearA} place={placeCrown} />
       <Instanced geometry={crownB} material={leafMat} items={nearB} place={placeCrown} />
-      <Instanced geometry={simple} material={leafMat} items={far} place={placeCrown} />
+      <Instanced geometry={simple} material={leafMat} items={farLite} place={placeCrown} shadow={false} />
     </>
   );
 }

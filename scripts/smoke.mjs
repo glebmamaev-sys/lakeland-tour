@@ -83,7 +83,8 @@ const COLLECT = `(() => {
   const floors = {}; for (const k of Object.keys(F).sort()) floors[k] = +F[k].topo.toFixed(2);
   let renderer = ''; try { const gl = window.__gl.getContext(); const e = gl.getExtension('WEBGL_debug_renderer_info'); renderer = e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : ''; } catch {}
   return { buildings: c.data.buildings.map((b) => b.id + ':' + b.model), houses: c.houses.length, floors, rooms, path: c.pathCheck, pathLines: c.pathLines,
-    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer, dup, gate: c.gate ?? null, arrive: c.arrive ? [+c.arrive.x.toFixed(1), +c.arrive.z.toFixed(1)] : null, arriveLand: c.arrive ? c.heightAt(c.arrive.x, c.arrive.z) !== null : false };
+    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer, dup, gate: c.gate ?? null, arrive: c.arrive ? [+c.arrive.x.toFixed(1), +c.arrive.z.toFixed(1)] : null, arriveLand: c.arrive ? c.heightAt(c.arrive.x, c.arrive.z) !== null : false,
+    perf: window.__gl ? { tris: window.__gl.info.render.triangles, calls: window.__gl.info.render.calls } : null };
 })()`;
 
 /** Плоский список расхождений двух значений (эталон → сейчас). */
@@ -152,6 +153,8 @@ async function main() {
       const noWay = Object.entries(entries).filter(([, v]) => /не найден|не провести/.test(v)).map(([k, v]) => `${k}: ${v}`);
       check('ко всем входам и к воротам проложен подход', !!data.gate && noWay.length === 0, data.gate ? noWay.join('\n      ') : 'ворот нет');
       check('старт прогулки — на парковке у ворот, на суше', !!data.arrive && data.arriveLand, data.arrive ? 'точка старта над водой' : 'точки прибытия нет');
+      // бюджет кадра с дрона (вид по умолчанию, вместе с проходом теней): до оптимизации 10.11 было 7,9 млн и 1 110 вызовов
+      const pf = data.perf; check(`нагрузка кадра с дрона в бюджете (${pf ? (pf.tris / 1e6).toFixed(2) + ' млн треугольников, ' + pf.calls + ' вызовов' : 'нет данных'})`, !!pf && pf.tris <= 3.5e6 && pf.calls <= 700, 'бюджет: 3,5 млн треугольников и 700 вызовов отрисовки');
       check('нет комнат-дублей (одна комната не обставлена дважды)', (data.dup ?? []).length === 0, (data.dup ?? []).join('\n      '));
       check(`оси дорожек не идут через дома и бассейны (${data.path?.pts ?? 0} точек)`, !!data.path && data.path.inHouse === 0 && data.path.inPool === 0, data.path ? `в домах ${data.path.inHouse}, в бассейнах ${data.path.inPool}` : 'нет данных');
       if (baseline && !UPDATE) {

@@ -66,7 +66,7 @@ const UP = new Vector3(0, 1, 0);
 
 export function Lotuses({ items, level }: { items: LotusItem[]; level: number }) {
   const geo = useMemo(() => {
-    const leaf = new LatheGeometry([new Vector2(0, 0), new Vector2(0.45, 0.005), new Vector2(0.8, 0.035), new Vector2(1, 0.1)], 14);
+    const leaf = new LatheGeometry([new Vector2(0, 0), new Vector2(0.7, 0.02), new Vector2(1, 0.1)], 9); // 36 треугольников на лист (было 84): листьев почти три тысячи
     const stalk = new CylinderGeometry(0.011, 0.015, 1, 5); stalk.translate(0, 0.5, 0);
     const bud = new SphereGeometry(1, 8, 7); bud.scale(0.035, 0.06, 0.035); bud.translate(0, 0.04, 0);
     const bc: number[] = []; const bp = bud.getAttribute('position'); const b0 = new Color('#f6e6ee'), b1 = new Color('#e47aa6');

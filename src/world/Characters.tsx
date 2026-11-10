@@ -6,10 +6,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import { playerState } from '../Player';
+import { input } from '../input';
 import { Box3, BoxGeometry, BufferAttribute, BufferGeometry, Color, CylinderGeometry, DoubleSide, Group, Matrix4, Mesh, MeshStandardMaterial, Quaternion, SphereGeometry, Vector3 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { clone as skeletonClone } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { AnimationMixer, LoopRepeat, type AnimationAction, type AnimationClip, type Object3D } from 'three';
+import { AnimationMixer, Frustum, LoopRepeat, Sphere, type AnimationAction, type AnimationClip, type Object3D } from 'three';
 import { useGLTF } from '@react-three/drei';
 import { box, col, merge, C } from './Furniture';
 import * as F from './Furniture';
@@ -22,6 +23,9 @@ const SHIRT = ['#f4f1ea', '#b7792f', '#3b4a6b', '#7a9a6a', '#d8c9a8', '#c45f4a',
 const PANTS = ['#d9d2c0', '#3b4a6b', '#5a3f2b', '#8c8c80', '#2a2927'];
 const HAIR = ['#1d1612', '#2a1e16', '#3a2a1e', '#0f0d0c'];
 
+// персонаж виден до CULL_FAR м от камеры (на телефоне ближе: с 150 м это точка в 3 пикселя), тень — до CULL_SHADOW м
+const CULL_FAR = input.mobile ? 150 : 420, CULL_SHADOW = input.mobile ? 28 : 45;
+const cullF = new Frustum(), cullM = new Matrix4(), cullS = new Sphere(); const cullMeshes = new WeakMap<Object3D, { list: Mesh[]; on: boolean }>();
 export type HumanOpts = { seed?: number; hat?: boolean; swimwear?: boolean };
 export type Skin = { mixer: AnimationMixer; actions: Record<string, AnimationAction>; cur: string; hand: Object3D | null };
 export type Human = { root: Group; body: Mesh; armL: Group; armR: Group; legL: Group; legR: Group; opts: HumanOpts; female: boolean; skin?: Skin };
@@ -454,7 +458,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     void d; return text;
   };
   const faceTo = (pos: Vector3, cur: number, d: number) => { const P = playerState.pos; if (!P) return cur; const yaw = Math.atan2(P.x - pos.x, P.z - pos.z); let dy = yaw - cur; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); return cur + dy * Math.min(1, d * 5); };
-  useFrame((_, dt) => {
+  useFrame((st3, dt) => {
     const d = Math.min(dt, 0.1); clock.current += d; const t = clock.current;
     const { graph } = state;
     const P = playerState.pos; const pt = playerTrack.current;
@@ -556,6 +560,15 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     // скелетные персонажи: шаг микшеров
     for (const h of [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h), ...state.sunbathers.map((s) => s.h)]) h.skin?.mixer.update(d);
     for (const st of state.standing) if (st.anim === 'sit') applySit(st.h); // поза «сидит» поверх клипа
+    // отсечение: у скелетных мешей frustumCulled выключен, и все персонажи (≈ 300 мешей) рисовались каждый кадр дважды —
+    // в кадре и в проходе теней. Персонаж вне поля зрения (с запасом 5 м под тень) скрывается, тень — только ближе 45 м
+    { const cam = st3.camera; cullM.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse); cullF.setFromProjectionMatrix(cullM);
+      for (const h of [...state.walkers.map((w) => w.h), ...state.swimmers.map((sw) => sw.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h), ...state.sunbathers.map((sb) => sb.h)]) {
+        const p = h.root.position; cullS.center.set(p.x, p.y + 1, p.z); cullS.radius = 5; const d2 = p.distanceToSquared(cam.position); const vis = d2 < CULL_FAR * CULL_FAR && cullF.intersectsSphere(cullS); if (h.root.visible !== vis) h.root.visible = vis;
+        const sh = vis && d2 < CULL_SHADOW * CULL_SHADOW; let rec = cullMeshes.get(h.root);
+        if (!rec) { const list: Mesh[] = []; h.root.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.castShadow) list.push(m); }); rec = { list, on: true }; cullMeshes.set(h.root, rec); }
+        if (rec.on !== sh) { rec.on = sh; for (const m of rec.list) m.castShadow = sh; }
+      } }
     // игрок не проходит сквозь людей: мягкий толчок наружу
     if (P) {
       const all = [...state.walkers.map((w) => w.h), ...(state.gardener ? [state.gardener.h] : []), ...(wt ? [wt.h] : []), ...state.standing.map((i) => i.h)];
