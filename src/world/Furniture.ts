@@ -298,6 +298,11 @@ export function planter(seed = 1): BufferGeometry {
   return merge(p);
 }
 
+/** Панель настенной плитки: плоскость w × h лицом на +z, низ на y=0; UV в долях 0,8 м (текстура плитки повторяется). */
+export function wallTile(w: number, h: number): BufferGeometry {
+  const g = new PlaneGeometry(w, h); g.translate(0, h / 2, 0); const uv = g.getAttribute('uv'); for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * (w / 0.8), uv.getY(i) * (h / 0.8)); return g;
+}
+
 /** Поворот вокруг Y и перенос. */
 export function place(g: BufferGeometry, x: number, y: number, z: number, yaw = 0): BufferGeometry {
   const ng = g.clone(); ng.applyQuaternion(new Quaternion().setFromAxisAngle(up, yaw)); ng.translate(x, y, z); return ng;

@@ -1,4 +1,5 @@
 // Процедурные текстуры мира (без скачивания чужих файлов): облака, нормали воды, шум для вариации газона.
+import { uEve } from './DayTime';
 import { CanvasTexture, RepeatWrapping, SRGBColorSpace, LinearFilter, LinearMipmapLinearFilter, type MeshStandardMaterial, type Texture } from 'three';
 
 function rng(seed: number) { return () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; }; }
@@ -143,17 +144,35 @@ export function makeTileTexture(n = 512, seed = 21): CanvasTexture {
   const t = new CanvasTexture(c); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.minFilter = LinearMipmapLinearFilter; t.magFilter = LinearFilter; t.anisotropy = 8; return t;
 }
 
+/** Глазурованная плитка ручной работы для стен санузлов: 8×8 плиток на текстуру (текстура = 0,8 м → плитка 10 см),
+ *  селадоновый зелёный с заметным разбросом тона от плитки к плитке, светлые швы. */
+export function makeZelligeTexture(n = 512, seed = 33): CanvasTexture {
+  const f = noiseField(n, 3, seed); const r = rng(seed);
+  const c = document.createElement('canvas'); c.width = c.height = n; const ctx = c.getContext('2d')!; const img = ctx.createImageData(n, n);
+  const tiles = 8, T = n / tiles; const tone: number[] = [], hue: number[] = []; for (let i = 0; i < tiles * tiles; i++) { tone.push((r() - 0.5) * 0.22); hue.push((r() - 0.5) * 0.1); }
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const tx = Math.floor(x / T), ty = Math.floor(y / T), gx = x % T, gy = y % T, k = ty * tiles + tx; const i = (y * n + x) * 4;
+    if (gx < 2 || gy < 2) { img.data[i] = 226; img.data[i + 1] = 222; img.data[i + 2] = 210; img.data[i + 3] = 255; continue; }
+    const edge = Math.min(gx, gy, T - gx, T - gy) / T; const v = 0.86 + tone[k] + (f[y * n + x] - 0.5) * 0.1 - (edge < 0.08 ? 0.06 : 0); // к краю плитки глазурь тоньше
+    img.data[i] = Math.max(0, Math.min(255, v * (150 + hue[k] * 120))); img.data[i + 1] = Math.max(0, Math.min(255, v * (186 + hue[k] * 40))); img.data[i + 2] = Math.max(0, Math.min(255, v * (170 - hue[k] * 90))); img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new CanvasTexture(c); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.minFilter = LinearMipmapLinearFilter; t.magFilter = LinearFilter; t.anisotropy = 8; return t;
+}
+
 /** Отделка «по умолчанию» для мешей Revit без текстур (один меш на материал: полы, стены, лестницы, парапеты):
  *  горизонтальные поверхности сверху — плитка известняка, вертикальные — рельеф штукатурки, низ (потолки) —
  *  гладкая. Трипланарно по мировым координатам; тёмные материалы (перила, рамы) не трогаются. */
 export function applyInteriorFinish(m: MeshStandardMaterial, tile: Texture, stucco: Texture, tileScale = 1 / 2.4, stuccoScale = 0.5) {
   m.onBeforeCompile = (sh) => {
-    sh.uniforms.uTile = { value: tile }; sh.uniforms.uStucco = { value: stucco }; sh.uniforms.uTileScale = { value: tileScale }; sh.uniforms.uStuccoScale = { value: stuccoScale };
+    sh.uniforms.uEve = uEve; sh.uniforms.uTile = { value: tile }; sh.uniforms.uStucco = { value: stucco }; sh.uniforms.uTileScale = { value: tileScale }; sh.uniforms.uStuccoScale = { value: stuccoScale };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vFPos; varying vec3 vFNrm;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvFPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vFNrm = normalize(mat3(modelMatrix) * objectNormal);');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vFPos; varying vec3 vFNrm; uniform sampler2D uTile; uniform sampler2D uStucco; uniform float uTileScale; uniform float uStuccoScale;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFPos; varying vec3 vFNrm; uniform sampler2D uTile; uniform sampler2D uStucco; uniform float uTileScale; uniform float uStuccoScale; uniform float uEve;')
+      // вечер: потолки и подшивки навесов светятся тёплым (как от ламп под ними), стены и полы — едва заметно
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{ float ny = normalize(vFNrm).y; float lum2 = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); if (lum2 > 0.3) totalEmissiveRadiance += uEve * vec3(1.0, 0.74, 0.46) * (ny < -0.6 ? 0.62 : 0.07) * diffuseColor.rgb; }')
       .replace('#include <map_fragment>', `#include <map_fragment>
         {
           vec3 c = diffuseColor.rgb; float lum = dot(c, vec3(0.3, 0.59, 0.11));

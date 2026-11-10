@@ -16,64 +16,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DIST = path.join(ROOT, 'dist');
+import { ROOT, DIST, sleep, serveDist, launchChrome, cdp } from './lib-headless.mjs';
 const BASELINE = path.join(ROOT, 'scripts', 'smoke-baseline.json');
 const UPDATE = process.argv.includes('--update');
 const TIMEOUT = Number(process.env.SMOKE_TIMEOUT ?? 240) * 1000;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.glb': 'model/gltf-binary',
-  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.hdr': 'application/octet-stream',
-  '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav', '.woff2': 'font/woff2', '.bin': 'application/octet-stream', '.ktx2': 'image/ktx2' };
-
-function serveDist() {
-  return new Promise((resolve) => {
-    const srv = createServer(async (req, res) => {
-      try {
-        let rel = decodeURIComponent(new URL(req.url, 'http://x').pathname); if (rel.endsWith('/')) rel += 'index.html';
-        const file = path.join(DIST, rel); if (!file.startsWith(DIST)) { res.writeHead(403).end(); return; }
-        const body = await readFile(file);
-        res.writeHead(200, { 'content-type': MIME[path.extname(file).toLowerCase()] ?? 'application/octet-stream', 'cache-control': 'no-store' }).end(body);
-      } catch { res.writeHead(404).end('not found'); }
-    });
-    srv.listen(0, '127.0.0.1', () => resolve({ srv, port: srv.address().port }));
-  });
-}
-
-function findChrome() {
-  const cands = [process.env.CHROME, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'].filter(Boolean);
-  const hit = cands.find((p) => existsSync(p)); if (!hit) throw new Error('Chrome не найден. Укажите путь: CHROME=/путь/к/chrome npm run smoke');
-  return hit;
-}
-
-async function launchChrome(profile) {
-  const proc = spawn(findChrome(), ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--window-size=1280,800', '--no-first-run',
-    '--no-default-browser-check', '--disable-extensions', '--mute-audio', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
-  const port = await new Promise((resolve, reject) => {
-    let buf = ''; const t = setTimeout(() => reject(new Error('Chrome не открыл порт отладки за 20 с')), 20000);
-    proc.stderr.on('data', (d) => { buf += d; const m = buf.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//); if (m) { clearTimeout(t); resolve(Number(m[1])); } });
-    proc.on('exit', (code) => { clearTimeout(t); reject(new Error(`Chrome завершился с кодом ${code}`)); });
-  });
-  return { proc, port };
-}
-
-function cdp(wsUrl) {
-  const ws = new WebSocket(wsUrl); let id = 0; const pending = new Map(); const handlers = [];
-  ws.addEventListener('message', (ev) => {
-    const m = JSON.parse(ev.data);
-    if (m.id) { const p = pending.get(m.id); if (!p) return; pending.delete(m.id); if (m.error) p.reject(new Error(m.error.message)); else p.resolve(m.result); }
-    else for (const h of handlers) h(m);
-  });
-  const send = (method, params = {}) => new Promise((resolve, reject) => { const i = ++id; pending.set(i, { resolve, reject }); ws.send(JSON.stringify({ id: i, method, params })); });
-  const evaluate = async (expression) => {
-    const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
-    return r.result.value;
-  };
-  return { ready: new Promise((res, rej) => { ws.addEventListener('open', res); ws.addEventListener('error', () => rej(new Error('нет связи с Chrome'))); }), send, evaluate, on: (h) => handlers.push(h), close: () => ws.close() };
-}
 
 /** Показатели сцены — выполняется в странице. */
 const COLLECT = `(() => {
@@ -83,7 +29,7 @@ const COLLECT = `(() => {
   const floors = {}; for (const k of Object.keys(F).sort()) floors[k] = +F[k].topo.toFixed(2);
   let renderer = ''; try { const gl = window.__gl.getContext(); const e = gl.getExtension('WEBGL_debug_renderer_info'); renderer = e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : ''; } catch {}
   return { buildings: c.data.buildings.map((b) => b.id + ':' + b.model), houses: c.houses.length, floors, rooms, path: c.pathCheck, pathLines: c.pathLines,
-    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer, dup, gate: c.gate ?? null, arrive: c.arrive ? [+c.arrive.x.toFixed(1), +c.arrive.z.toFixed(1)] : null, arriveLand: c.arrive ? c.heightAt(c.arrive.x, c.arrive.z) !== null : false,
+    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer, dup, gate: c.gate ?? null, lamps: c.lamps ?? 0, evening: typeof window.__setEvening === 'function', arrive: c.arrive ? [+c.arrive.x.toFixed(1), +c.arrive.z.toFixed(1)] : null, arriveLand: c.arrive ? c.heightAt(c.arrive.x, c.arrive.z) !== null : false,
     perf: window.__gl ? { tris: window.__gl.info.render.triangles, calls: window.__gl.info.render.calls } : null };
 })()`;
 
@@ -137,7 +83,7 @@ async function main() {
       else if ((m = l.match(/^\[pads\] .*: (\d+)$/))) pads = Number(m[1]);
     }
     const snapshot = data && { floors: data.floors, rooms: data.rooms, path: data.path, pathLines: data.pathLines, flights: data.flights, steps: data.steps, walls: data.walls,
-      lotus: data.lotus, gate: data.gate, arrive: data.arrive, entries, strips: Object.fromEntries(Object.entries(strips).sort()), pads };
+      lotus: data.lotus, gate: data.gate, arrive: data.arrive, lamps: data.lamps, entries, strips: Object.fromEntries(Object.entries(strips).sort()), pads };
     const baseline = existsSync(BASELINE) ? JSON.parse(await readFile(BASELINE, 'utf8')) : null;
 
     // жёсткие правила
@@ -155,6 +101,7 @@ async function main() {
       check('старт прогулки — на парковке у ворот, на суше', !!data.arrive && data.arriveLand, data.arrive ? 'точка старта над водой' : 'точки прибытия нет');
       // бюджет кадра с дрона (вид по умолчанию, вместе с проходом теней): до оптимизации 10.11 было 7,9 млн и 1 110 вызовов
       const pf = data.perf; check(`нагрузка кадра с дрона в бюджете (${pf ? (pf.tris / 1e6).toFixed(2) + ' млн треугольников, ' + pf.calls + ' вызовов' : 'нет данных'})`, !!pf && pf.tris <= 3.5e6 && pf.calls <= 700, 'бюджет: 3,5 млн треугольников и 700 вызовов отрисовки');
+      check(`вечерний режим и светильники дорожек на месте (${data.lamps} шт.)`, data.evening && data.lamps >= 15, 'нет переключателя вечера или мало светильников');
       check('нет комнат-дублей (одна комната не обставлена дважды)', (data.dup ?? []).length === 0, (data.dup ?? []).join('\n      '));
       check(`оси дорожек не идут через дома и бассейны (${data.path?.pts ?? 0} точек)`, !!data.path && data.path.inHouse === 0 && data.path.inPool === 0, data.path ? `в домах ${data.path.inHouse}, в бассейнах ${data.path.inPool}` : 'нет данных');
       if (baseline && !UPDATE) {

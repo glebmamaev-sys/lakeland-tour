@@ -19,6 +19,7 @@ import { Capture } from './Capture';
 import { ComplexScene, complexStage, complexStore } from './Complex';
 import { ComplexMap } from './ComplexMap';
 import { SkyDome } from './world/SkyDome';
+import { DayLight, useEvening } from './world/DayLight';
 
 import { MODELS } from './models';
 
@@ -47,6 +48,7 @@ export default function App() {
   const complexLoading = mode === 'complex' && cStage !== 'terrain:done';
   const ambient = useAmbient(mode === 'complex' && !complexLoading);
   const lowQ = useQuality();
+  const [evening, setEve] = useEvening();
   const [gl, setGl] = useState<WebGLRenderer | null>(null);
   const villa = VILLAS[villaId];
   const tour = PANO_TOURS[villaId] ?? [];
@@ -98,8 +100,7 @@ export default function App() {
             <Suspense fallback={null}>
               {new URLSearchParams(location.search).has('prosky') && <Environment preset="park" background={false} environmentIntensity={0.45} />}
             </Suspense>
-            <hemisphereLight args={['#cfe3f5', '#b9b39f', 0.9]} />
-            <ambientLight intensity={0.35} />
+            <DayLight />
             <ComplexSun walk={complexWalk} mobile={input.mobile} />
             <Suspense fallback={null}><ComplexScene walk={complexWalk} /></Suspense>
             <QualityWatch active={!complexLoading && colliderState !== 'building'} />
@@ -177,6 +178,12 @@ export default function App() {
             <div className="seg">
               <button className={!complexWalk ? 'on' : ''} onClick={() => { if (document.pointerLockElement) document.exitPointerLock(); setComplexWalk(false); }}>С дрона</button>
               <button className={complexWalk ? 'on' : ''} onClick={() => setComplexWalk(true)}>Пешком</button>
+            </div>
+          )}
+          {mode === 'complex' && (
+            <div className="seg">
+              <button className={!evening ? 'on' : ''} onClick={() => setEve(false)}>День</button>
+              <button className={evening ? 'on' : ''} onClick={() => setEve(true)}>Вечер</button>
             </div>
           )}
         </div>

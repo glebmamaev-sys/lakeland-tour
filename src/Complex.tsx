@@ -27,6 +27,7 @@ import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
 import { buildEntrance, planGate, type Gate } from './world/Entrance';
 import { mergeByMaterial } from './world/MergeLod';
+import { buildPathLamps, PathLamps, type Lamps } from './world/PathLamps';
 import { Grass } from './world/Grass';
 import { planTerraces, wallGeometry, type Terraces } from './world/Terraces';
 import { gradePaths, stepGeometry, type Graded } from './world/PathGrade';
@@ -93,7 +94,7 @@ const placePalmShort = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r *
 const placeBush = (p: Plant) => ({ x: p.x, y: p.y + 0.1, z: p.z, yaw: p.r * 6.28, height: 0.7 + p.s * 0.9 });
 const placeTree = (p: Plant) => ({ x: p.x, y: p.y + 0.05, z: p.z, yaw: p.r * 6.28, height: 4 + p.s * 2.5 });
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
-type BuiltScene = { entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; arrive: { x: number; z: number; yaw: number } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
+type BuiltScene = { lamps: Lamps | null; entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; arrive: { x: number; z: number; yaw: number } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
@@ -236,6 +237,14 @@ function clearBaths(scene: Object3D, plan: Plan, glass: Box3[]) {
 /** Кухонная сантехника Revit (белые мойка и плита без текстур) в небольших кухнях открытой планировки: в зоне метки
  *  кухни убираются отдельные предметы до 1,3 м высотой; гарнитур ставит furnishOpenPlan/furnishKitchen. Большая
  *  «кухня» виллы 1 (44 м², обставлена в Revit столом и диваном) не трогается. */
+/** Мебель Revit без текстур (белые столы, стулья, диван, тумбы) в столовых и в большой кухне-гостиной виллы 1: убирается
+ *  по компонентам размером с предмет мебели; обеденную группу, диван и гарнитур ставит furnishDining / furnishOpenPlan. */
+function clearRevitFurniture(scene: Object3D, plan: Plan, glass: Box3[]) {
+  const boxes = roomRects(plan, glass, (n) => /dining/i.test(n)).concat(roomRects(plan, glass, (n) => /kitchen/i.test(n)).filter((r) => !!r.area && r.area > 25))
+    .map(({ rect, level }) => new Box3(new Vector3(rect.x0 + 0.05, level + 0.006, rect.z0 + 0.05), new Vector3(rect.x1 - 0.05, level + 1.7, rect.z1 - 0.05))); // от 6 мм над полом: полозья стульев лежат на самом полу
+  stripComponents(scene, boxes, (sz) => sz.y < 1.35 && Math.max(sz.x, sz.z) < 3.4 && Math.max(sz.x, sz.y, sz.z) > 0.006 && (sz.y > 0.02 || Math.max(sz.x, sz.z) < 0.7), ['default', 'textured', 'walnut', 'ceiling', 'paving', 'plants', 'paint', 'stucco', 'slats'], 'revit-furniture', plan.villa); // paint — хромированные ножки стульев
+  stripComponents(scene, boxes, (sz) => Math.max(sz.x, sz.y, sz.z) < 1.2 && Math.max(sz.x, sz.y, sz.z) > 0.1, ['glass'], 'revit-furniture-glass', plan.villa);
+}
 function clearKitchens(scene: Object3D, plan: Plan, glass: Box3[]) {
   const boxes = roomRects(plan, glass, (n) => n.toLowerCase().includes('kitchen')).filter((r) => !!r.area && r.area < 20).map(({ rect, level, x, z, area }) => {
     const h = Math.sqrt(area ?? 9) * 0.6 + 0.3;
@@ -333,7 +342,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const plan = data.plans[MODEL_IDS[k]];
       if (plan && !g.scene.getObjectByName('furniture')) {
         const t1 = performance.now();
-        if (!g.scene.userData.balustersDone) { const gl0 = glassBoxes(g.scene); stripBalusters(g.scene, plan); clearBaths(g.scene, plan, gl0); clearBeds(g.scene, plan, gl0); clearKitchens(g.scene, plan, gl0); g.scene.userData.balustersDone = true; }
+        if (!g.scene.userData.balustersDone) { const gl0 = glassBoxes(g.scene); stripBalusters(g.scene, plan); clearBaths(g.scene, plan, gl0); clearBeds(g.scene, plan, gl0); clearKitchens(g.scene, plan, gl0); clearRevitFurniture(g.scene, plan, gl0); g.scene.userData.balustersDone = true; }
         const colT = buildCollider(g.scene); const rayS = new Ray(new Vector3(), new Vector3(0, -1, 0));
         const support = colT ? (x: number, y: number, z: number) => { rayS.origin.set(x, y + 0.35, z); const hs = colT.bvh.raycast(rayS, DoubleSide); return hs.some((ht) => ht.distance < 0.9); } : null;
         // препятствие: между полом +12 см и +1,5 м над точкой есть поверхность модели (мебель Revit, подоконники, выступы)
@@ -902,6 +911,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const bottom = makeBottomTexture(h, nx, nz, x0, z0, step, W); // карта дна для прозрачной воды
     // дорожки: сеть по генплану (въезд → проезд между 2.x → дорога ряда 1.x → вилла 3), ленты 2,6 м по рельефу
     setStage('terrain:paths');
+    // светильники вдоль дорожек (вечером горят): не в домах и бассейнах, не на самой дорожке; два — у ворот изнутри
+    const lamps = buildPathLamps(net.lines, (x, z) => siteAt(x, z), (x, z) => inPoly(x, z, c.site.boundary) && !pathBlocked(x, z) && !waterAt(x, z) && distToPaths(net, x, z) > 1.5,
+      gate ? [-1, 1].map((sg) => [gate.x - gate.nx * 2.2 - gate.nz * sg * 2.6, gate.z - gate.nz * 2.2 + gate.nx * sg * 2.6] as [number, number]) : []);
     const ribbons = graded ? graded.ribbons : net.lines.map((l) => pathRibbon(l, 2.6, (x, z) => siteAt(x, z) ?? heightAt(x, z))).filter((g): g is BufferGeometry => !!g);
     const paths = ribbons.length ? mergeGeometries(ribbons, false) : null;
     // пальмы: окрестности (сетка 14 м со случайным сдвигом, суша, не на домах) и участок (в зелёных зонах, не на дорожках);
@@ -960,9 +972,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       return true;
     };
     (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
-    const builtNow = { entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, arrive: entrance?.arrive ?? null, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
+    const builtNow = { lamps, entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, arrive: entrance?.arrive ?? null, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
-    (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
+    (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, lamps: lamps.count, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
   }, [data, instances, houses]);
 
   // коллайдер всего комплекса: дома (с проёмами дверей в системе координат каждого дома, без растений и штор),
@@ -1106,6 +1118,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
             <mesh geometry={built.dem} material={demMat} receiveShadow />
             {built.houses && <mesh geometry={built.houses} material={[roofMat, wallMat]} castShadow receiveShadow />}
             {built.paths && <mesh geometry={built.paths} material={pathMat} receiveShadow />}
+            {built.lamps && <PathLamps lamps={built.lamps} />}
             {built.entrance?.paved && <mesh geometry={built.entrance.paved} material={driveMat} receiveShadow />}
             {built.entrance?.solid && <mesh geometry={built.entrance.solid} material={entranceMat} castShadow receiveShadow />}
             {built.walls && <mesh geometry={built.walls} material={retMat} castShadow receiveShadow />}

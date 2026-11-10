@@ -6,6 +6,7 @@ import {
   MeshPhysicalMaterial, MeshStandardMaterial, Object3D, RepeatWrapping, SRGBColorSpace, Texture, Vector2, Vector3,
 } from 'three';
 import { applyInteriorFinish, makeTileTexture } from './world/textures';
+import { onEve } from './world/DayTime';
 
 export type Role =
   | 'glass' | 'water' | 'ground' | 'paving' | 'terrain' | 'ceiling' | 'textured' | 'default'
@@ -480,16 +481,22 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
       return new MeshStandardMaterial({ color: new Color(options.paint ?? '#35383a'), roughness: 0.55, metalness: 0.1, side: DoubleSide });
     case 'plants':
       return new MeshStandardMaterial({ color: new Color('#4f7a3c'), roughness: 1, metalness: 0, side: DoubleSide });
-    case 'glass':
-      return new MeshPhysicalMaterial({
+    case 'glass': {
+      const m = new MeshPhysicalMaterial({
         color: new Color('#cfe6ea'), transparent: true, opacity: 0.22, roughness: 0.06, metalness: 0,
-        envMapIntensity: 1.2, side: DoubleSide, depthWrite: false, clearcoat: 1, clearcoatRoughness: 0.05,
+        envMapIntensity: 1.2, side: DoubleSide, depthWrite: false, clearcoat: 1, clearcoatRoughness: 0.05, emissive: new Color('#ffc57a'), emissiveIntensity: 0,
       });
-    case 'water':
-      return new MeshPhysicalMaterial({
+      onEve((k) => { m.emissiveIntensity = 0.55 * k; m.opacity = 0.22 + 0.2 * k; }); // вечером окна светятся тёплым
+      return m;
+    }
+    case 'water': {
+      const m = new MeshPhysicalMaterial({
         color: new Color('#2f9fc4'), transparent: true, opacity: 0.78, roughness: 0.08, metalness: 0,
-        envMapIntensity: 1.0, side: DoubleSide, depthWrite: false,
+        envMapIntensity: 1.0, side: DoubleSide, depthWrite: false, emissive: new Color('#39c6d8'), emissiveIntensity: 0,
       });
+      onEve((k) => { m.emissiveIntensity = 0.6 * k; }); // подводная подсветка бассейна
+      return m;
+    }
     case 'ground': {
       const m = new MeshStandardMaterial({ map: src.map ?? assets.grass, color: new Color('#dfe6d2'), roughness: 1, metalness: 0, side: DoubleSide });
       if (m.map) { m.map.wrapS = m.map.wrapT = RepeatWrapping; m.map.colorSpace = SRGBColorSpace; m.map.anisotropy = 8; m.map.needsUpdate = true; }
@@ -510,7 +517,9 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
     }
     case 'ceiling':
       // потолки освещены только снизу (небо их не видит) — чуть подсвечиваем, иначе серые
-      return new MeshStandardMaterial({ color: new Color('#e9e4da'), emissive: new Color('#262522'), roughness: 0.95, metalness: 0, side: DoubleSide });
+      // в вилле 3 в этот же меш («…_inside») попали и полы комнат: без отделки они были чисто белыми. Та же отделка,
+      // что у роли default: верхние грани — плитка известняка, стены — рельеф штукатурки, низ (потолок) — гладкий
+      { const m = new MeshStandardMaterial({ color: new Color('#e9e4da'), emissive: new Color('#262522'), roughness: 0.95, metalness: 0, side: DoubleSide }); applyInteriorFinish(m, tileTexture(), assets.stucco); return m; }
     case 'textured': {
       const m = src.clone();
       m.roughness = 0.9; m.metalness = 0; m.side = DoubleSide;

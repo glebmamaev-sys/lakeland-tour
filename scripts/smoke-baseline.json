@@ -22,8 +22,8 @@
       "bedroom@3.3 4.4×3.8 — 3 предм. bed@nz",
       "bedroom@6.6 4.2×3.6 — 2 предм. bed@pz",
       "bedroom@6.6 4.4×3.6 — 2 предм. bed@nx",
-      "kitchen@0 9.7×4.8 — 2 предм. kitchen@nx",
       "living@9.9 3.0×3.0 — 4 предм. sofa@nx",
+      "open@0 9.8×4.8 — 12 предм. open: kitchen@nz dining sofa@nx",
       "terrace@0 13.2×8.8 — 13 предм. lounge+dining",
       "terrace@3.3 3.0×3.0 — 3 предм. lounge",
       "terrace@6.6 15.0×7.8 — 13 предм. sunbeds+lounge",
@@ -76,7 +76,7 @@
       "bedroom@0 5.4×4.2 — 5 предм. bed~pz",
       "bedroom@0 5.6×3.8 — 4 предм. bed~pz",
       "bedroom@0 5.6×4.0 — 2 предм. bed~nz",
-      "dining@-3.3 6.5×7.2 — 0 предм.",
+      "dining@-3.3 6.5×7.2 — 7 предм. dining",
       "kitchen@-3.3 3.6×3.3 — 1 предм. kitchen@nz",
       "laundry@-3.3 2.0×4.5 — 3 предм. laundry@px",
       "living@-3.3 5.3×9.0 — 4 предм. sofa@nz",
@@ -113,6 +113,7 @@
     -66.6,
     -48.5
   ],
+  "lamps": 20,
   "entries": {
     "2.1": "подход",
     "2.2": "подход",
