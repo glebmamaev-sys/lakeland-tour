@@ -96,7 +96,7 @@ export function buildEntrance(gate: Gate, B: XZ[], hAt: H, land: (x: number, z: 
   if (road) { const mid = W(0, V1 + 8); drive.push(mid, [road.x, road.z]); const d = ribbon(drive, 4.6, hAt, 0.14); if (d) paved.push(d);
     const part = road.road.filter((q) => Math.hypot(q[0] - road.x, q[1] - road.z) < 170); if (part.length > 1) { const r = ribbon(part, 5.6, hAt, 0.1); if (r) paved.push(r); } }
   // короткий выход от ворот на площадку (полоса у самой границы — между оградой и парковкой)
-  { const a = ribbon([W(0, -0.6), W(0, V0 + 0.6)], 3.6, hAt, 0.13); if (a) paved.push(a); }
+  { const a = ribbon([W(0, -1.6), W(0, V0 + 0.6)], 3.6, hAt, 0.13); if (a) paved.push(a); }
   const yAt = (x: number, z: number) => hAt(x, z) ?? 0;
   // разметка мест и машины: по два места с каждой стороны от прохода к воротам, носом к ограде
   const stalls = [-7.0, -4.4, 4.4, 7.0];

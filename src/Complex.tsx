@@ -87,7 +87,7 @@ const placePalmShort = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r *
 const placeBush = (p: Plant) => ({ x: p.x, y: p.y + 0.1, z: p.z, yaw: p.r * 6.28, height: 0.7 + p.s * 0.9 });
 const placeTree = (p: Plant) => ({ x: p.x, y: p.y + 0.05, z: p.z, yaw: p.r * 6.28, height: 4 + p.s * 2.5 });
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
-type BuiltScene = { entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
+type BuiltScene = { entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; arrive: { x: number; z: number; yaw: number } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
@@ -691,7 +691,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     console.info('[entrance]', gate ? `ворота в (${gate.x.toFixed(1)}, ${gate.z.toFixed(1)}), наружу (${gate.nx.toFixed(2)}, ${gate.nz.toFixed(2)})` : 'места для ворот нет');
     const net = buildPathNetwork(houses, pose ? pose.door : (WALK_SPAWN_XZ.map((v, k) => v + (k ? -14 : -12)) as [number, number]),
       pose ? { x: pose.pos[0], z: pose.pos[1], r: pose.r, toward: WALK_SPAWN_XZ } : undefined, houses.map((hh) => ({ x: hh.entry[0], z: hh.entry[2], yaw: hh.entryYaw })),
-      pathBlocked, { blocked: pathBlocked, inside: (x, z) => inPoly(x, z, c.site.boundary), height: siteSampler(c, h), bbox: [x0, z0, x0 + (nx - 1) * step, z0 + (nz - 1) * step] }, gate ? [gate.x - gate.nx * 2.2, gate.z - gate.nz * 2.2] : undefined); // «дом» для дорожек — маска стен и комнат (до террас дорожки доходят) и бассейны с бортом 1 м
+      pathBlocked, { blocked: pathBlocked, inside: (x, z) => inPoly(x, z, c.site.boundary), height: siteSampler(c, h), bbox: [x0, z0, x0 + (nx - 1) * step, z0 + (nz - 1) * step] }, gate ? [gate.x - gate.nx * 0.8, gate.z - gate.nz * 0.8] : undefined); // «дом» для дорожек — маска стен и комнат (до террас дорожки доходят) и бассейны с бортом 1 м
     // автопроверка (scripts/smoke.mjs): точки осей дорожек (шаг 0,5 м) внутри маски комнат и внутри бассейнов — должно быть 0
     const pathCheck = { pts: 0, inHouse: 0, inPool: 0 };
     (window as unknown as { __pathDbg: unknown }).__pathDbg = { lines: net.lines.map((l) => l.map((q) => [+q.x.toFixed(2), +q.z.toFixed(2)])), blocked: (x: number, z: number) => indoorW(x, z) !== null, pool: (x: number, z: number) => pools.some((b) => x > b.min.x - 1.0 && x < b.max.x + 1.0 && z > b.min.z - 1.0 && z < b.max.z + 1.0), door: pose ? pose.door : null };
@@ -940,7 +940,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       return true;
     };
     (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
-    const builtNow = { entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
+    const builtNow = { entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, arrive: entrance?.arrive ?? null, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
     (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
   }, [data, instances, houses]);
@@ -970,15 +970,19 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
   }, [walk, built, instances, data]);
   useEffect(() => () => { colliderStore.current = null; }, []); // при выходе из режима коллайдер виллы соберёт сама вилла
 
-  // старт прогулки: у въезда, на высоте рельефа; взгляд на ряд вилл
+  // старт прогулки: на гостевой парковке у ворот, лицом к воротам (гость приехал и входит в комплекс); если места для
+  // въезда не нашлось — прежняя точка на проезде у магазина, взгляд на ряд вилл. WALK_SPAWN_XZ остаётся ориентиром
+  // для поворота магазина и на старт уже не влияет
+  const arrive = built?.arrive ?? null;
   const spawn = useMemo<[number, number, number]>(() => {
-    const y = complexStore.heightAt?.(WALK_SPAWN_XZ[0], WALK_SPAWN_XZ[1]) ?? (data?.c.water_level ?? 0) + 6;
-    return [WALK_SPAWN_XZ[0], y + 0.4, WALK_SPAWN_XZ[1]];
+    const sx = arrive ? arrive.x : WALK_SPAWN_XZ[0], sz = arrive ? arrive.z : WALK_SPAWN_XZ[1];
+    const y = complexStore.heightAt?.(sx, sz) ?? (data?.c.water_level ?? 0) + 6;
+    return [sx, y + (arrive ? 0.8 : 0.4), sz]; // покрытие парковки лежит на 12 см выше рельефа (и на сетке 10 м) — встаём с запасом
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [built, data]);
   const lowQ = useQuality();
   const inSiteFn = useMemo(() => { const B = data?.c.site.boundary; return (x: number, z: number) => (B ? inPoly(x, z, B) : false); }, [data]);
-  const spawnYaw = Math.atan2(-(WALK_LOOK_XZ[0] - WALK_SPAWN_XZ[0]), -(WALK_LOOK_XZ[1] - WALK_SPAWN_XZ[1]));
+  const spawnYaw = arrive ? arrive.yaw : Math.atan2(-(WALK_LOOK_XZ[0] - WALK_SPAWN_XZ[0]), -(WALK_LOOK_XZ[1] - WALK_SPAWN_XZ[1]));
 
   // магазин у въезда — простой объём 1 этаж
   const shop = data?.c.buildings.find((b) => b.model === 'shop');

@@ -117,7 +117,7 @@ export function buildPathNetwork(houses: HouseLite[], entrance: [number, number]
   };
   const fronted = new Set<string>(ids1);
   for (const h of houses) if (h.model === 'villa21' || h.model === 'villa22') { if (attach(L(h, 2.0, 3.8), h.id)) fronted.add(h.id); }
-  // от ворот участка (точка в 2 м внутри границы) — к ближайшей дорожке в обход магазина и домов
+  // от ворот участка (точка в 0,8 м внутри границы — дорожка начинается прямо в створе) — к ближайшей дорожке в обход магазина и домов
   if (gateIn) attach(new Vector3(gateIn[0], 0, gateIn[1]), 'ворота');
   // тропинка к каждому входу: от ближайшей точки сети до точки в 2,2 м перед дверью (yaw — взгляд внутрь дома)
   const invAll = houses.map((h) => ({ m: h.matrix.clone().invert(), fp: h.fp, cx: h.matrix.elements[12], cz: h.matrix.elements[14] })); const lq = new Vector3();
