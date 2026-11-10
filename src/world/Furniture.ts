@@ -258,6 +258,40 @@ export function lounger(): BufferGeometry {
   p.push(box(0.62, 0.05, 1.3, C.white, 0, 0.38, 0.22, 0.01));
   return merge(p);
 }
+/** Пляжный зонт: чугунное основание, стойка из тика, льняной купол ⌀ 2,8 м на высоте 2,1–2,5 м. */
+export function umbrella(r = 1.4): BufferGeometry {
+  const p: BufferGeometry[] = [cyl(0.26, 0.28, 0.07, C.charcoal, 0, 0, 0, 14), cyl(0.028, 0.028, 2.45, C.teak, 0, 0.05, 0, 8)];
+  p.push(col(new CylinderGeometry(0.06, r, 0.42, 8, 1, true).translate(0, 2.3, 0), C.paper, 0.03));
+  p.push(col(new CylinderGeometry(r, r, 0.1, 8, 1, true).translate(0, 2.04, 0), C.paper, 0.03)); // свес купола
+  p.push(cyl(0.04, 0.02, 0.1, C.teak, 0, 2.5, 0, 8));
+  return merge(p);
+}
+/** Стиральная или сушильная машина: белый корпус 0,6 × 0,85 × 0,6, круглый люк спереди (+z), панель. */
+export function washer(dryer = false): BufferGeometry {
+  const p: BufferGeometry[] = [box(0.6, 0.85, 0.58, C.white, 0, 0, 0, 0.01)];
+  p.push(col(new CylinderGeometry(0.2, 0.2, 0.03, 18).rotateX(Math.PI / 2).translate(0, 0.42, 0.3), dryer ? '#55585c' : '#9fb4bd', 0.01));
+  p.push(col(new CylinderGeometry(0.15, 0.15, 0.035, 18).rotateX(Math.PI / 2).translate(0, 0.42, 0.302), dryer ? '#2c2d30' : '#5f7783', 0.01));
+  p.push(box(0.56, 0.08, 0.02, '#d9dcdd', 0, 0.74, 0.29, 0.01)); p.push(box(0.1, 0.04, 0.025, C.charcoal, 0.18, 0.76, 0.29, 0.0));
+  return merge(p);
+}
+/** Стол прачечной: тиковая тумба с каменной столешницей и мойкой, корзина из ротанга, полка с полотенцами над ним. Спинка к −z. */
+export function laundryCounter(len = 1.2): BufferGeometry {
+  const p: BufferGeometry[] = [box(len, 0.84, 0.55, C.teak, 0, 0, 0, 0.03), box(len + 0.04, 0.04, 0.6, C.stone, 0, 0.84, 0.01, 0.02)];
+  p.push(box(0.42, 0.02, 0.34, '#eceae4', -len / 4, 0.875, 0.02, 0.0)); p.push(cyl(0.012, 0.014, 0.24, '#c9c9c4', -len / 4, 0.88, -0.2, 8));
+  p.push(col(new CylinderGeometry(0.2, 0.16, 0.3, 12).translate(len / 4, 1.03, 0.02), C.rattan, 0.06)); p.push(col(new SphereGeometry(0.17, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2).translate(len / 4, 1.16, 0.02), C.linen, 0.03));
+  p.push(box(len, 0.035, 0.28, C.walnut, 0, 1.5, -0.12, 0.02));
+  for (let i = 0; i < 3; i++) p.push(box(0.26, 0.05 + (i % 2) * 0.04, 0.2, i % 2 ? C.sand : C.white, -len / 2 + 0.2 + i * 0.32, 1.535, -0.12, 0.02));
+  return merge(p);
+}
+/** Низкий комод-консоль из ореха с вазой: вдоль стены, спинка к −z. */
+export function sideboard(len = 1.6): BufferGeometry {
+  const p: BufferGeometry[] = [box(len, 0.55, 0.42, C.walnut, 0, 0.18, 0, 0.03), box(len + 0.04, 0.03, 0.46, C.walnut, 0, 0.73, 0, 0.02)];
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) p.push(cyl(0.02, 0.015, 0.18, C.charcoal, sx * (len / 2 - 0.08), 0, sz * 0.15, 6));
+  const n = Math.max(2, Math.round(len / 0.55)); for (let i = 0; i < n; i++) p.push(box(0.02, 0.2, 0.012, C.brass, -len / 2 + (i + 0.5) * (len / n), 0.36, 0.215, 0.0));
+  p.push(col(new LatheGeometry([new Vector2(0.05, 0), new Vector2(0.11, 0.08), new Vector2(0.12, 0.2), new Vector2(0.05, 0.3), new Vector2(0.06, 0.34)], 12).translate(-len / 4, 0.76, 0), C.terracotta));
+  p.push(box(0.3, 0.03, 0.22, C.linen, len / 4, 0.76, 0, 0.02)); p.push(box(0.26, 0.03, 0.18, C.indigo, len / 4, 0.79, 0, 0.02));
+  return merge(p);
+}
 export function planter(seed = 1): BufferGeometry {
   const p: BufferGeometry[] = [col(new CylinderGeometry(0.42, 0.34, 0.7, 12).translate(0, 0.35, 0), C.terracotta)];
   const plant = pottedPlant(seed % 2 ? 'strelitzia' : 'kentia', seed); plant.scale(0.8, 0.75, 0.8); plant.translate(0, 0.3, 0); p.push(plant);

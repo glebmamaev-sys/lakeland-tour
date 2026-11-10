@@ -78,11 +78,12 @@ function cdp(wsUrl) {
 /** Показатели сцены — выполняется в странице. */
 const COLLECT = `(() => {
   const c = window.__complex, R = window.__rooms || {}, F = window.__floors || {}; const rooms = {};
-  for (const v of Object.keys(R).sort()) rooms[v] = R[v].map((r) => r.kind + '@' + r.level + ' ' + (r.rect[2] - r.rect[0]).toFixed(1) + '×' + (r.rect[3] - r.rect[1]).toFixed(1) + ' — ' + r.placed + ' предм.' + (r.note ? ' ' + r.note : ''));
+  const dup = []; for (const v of Object.keys(R)) { const seen = new Set(); for (const r of R[v]) { const k = r.kind + '@' + r.level + ' ' + r.rect.join(','); if (seen.has(k)) dup.push(v + ': ' + k); seen.add(k); } }
+  for (const v of Object.keys(R).sort()) rooms[v] = R[v].map((r) => r.kind + '@' + r.level + ' ' + (r.rect[2] - r.rect[0]).toFixed(1) + '×' + (r.rect[3] - r.rect[1]).toFixed(1) + ' — ' + r.placed + ' предм.' + (r.note ? ' ' + r.note : '')).sort(); // по алфавиту: появление новой комнаты не сдвигает остальные строки
   const floors = {}; for (const k of Object.keys(F).sort()) floors[k] = +F[k].topo.toFixed(2);
   let renderer = ''; try { const gl = window.__gl.getContext(); const e = gl.getExtension('WEBGL_debug_renderer_info'); renderer = e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : ''; } catch {}
   return { buildings: c.data.buildings.map((b) => b.id + ':' + b.model), houses: c.houses.length, floors, rooms, path: c.pathCheck, pathLines: c.pathLines,
-    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer };
+    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer, dup };
 })()`;
 
 /** Плоский список расхождений двух значений (эталон → сейчас). */
@@ -147,16 +148,20 @@ async function main() {
       const all = Object.entries(data.rooms).flatMap(([v, list]) => list.map((r) => `${v}: ${r}`));
       const noBed = all.filter((r) => / bedroom@/.test(r) && !/ bed[@~]/.test(r));
       check(`кровать в каждой спальне (${all.filter((r) => / bedroom@/.test(r)).length})`, noBed.length === 0, noBed.join('\n      '));
+      check('нет комнат-дублей (одна комната не обставлена дважды)', (data.dup ?? []).length === 0, (data.dup ?? []).join('\n      '));
       check(`оси дорожек не идут через дома и бассейны (${data.path?.pts ?? 0} точек)`, !!data.path && data.path.inHouse === 0 && data.path.inPool === 0, data.path ? `в домах ${data.path.inHouse}, в бассейнах ${data.path.inPool}` : 'нет данных');
       if (baseline && !UPDATE) {
         const emptied = [];
-        for (const [v, list] of Object.entries(baseline.rooms ?? {})) list.forEach((r, i) => { const now = data.rooms[v]?.[i]; if (!/ — 0 предм\./.test(r) && (!now || / — 0 предм\./.test(now))) emptied.push(`${v}: ${r}  →  ${now ?? 'нет комнаты'}`); });
+        // по каждой вилле и виду комнаты на уровне: обставленных комнат не должно стать меньше, чем в эталоне
+        const furnished = (list) => { const m = {}; for (const r of list ?? []) { const k = r.split(' ')[0]; if (!/ — 0 предм\./.test(r)) m[k] = (m[k] ?? 0) + 1; } return m; };
+        for (const [v, list] of Object.entries(baseline.rooms ?? {})) { const was = furnished(list), now = furnished(data.rooms[v]); for (const k of Object.keys(was)) if ((now[k] ?? 0) < was[k]) emptied.push(`${v}: ${k} — обставлено ${now[k] ?? 0} из ${was[k]}`); }
         check('обставленные комнаты не опустели', emptied.length === 0, emptied.join('\n      '));
       }
     }
     const changes = baseline && snapshot ? diff(baseline, snapshot) : [];
 
     await mkdir(path.join(ROOT, 'captures'), { recursive: true });
+    if (process.env.SMOKE_DEBUG && built) await writeFile(path.join(ROOT, 'captures', 'smoke-debug.json'), JSON.stringify({ logs, rooms: await tab.evaluate('JSON.stringify(window.__rooms)').then((t) => JSON.parse(t)).catch(() => null) }, null, 1));
     await writeFile(path.join(ROOT, 'captures', 'smoke-last.json'), JSON.stringify({ at: new Date().toISOString(), checks, changes, snapshot, errors }, null, 2));
 
     console.log('\nАвтопроверка сцены');

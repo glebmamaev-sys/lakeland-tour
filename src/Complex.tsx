@@ -215,7 +215,7 @@ function stripBalusters(scene: Object3D, plan: Plan) {
  *  все компоненты размером с предмет (ниже 1,5 м, до 3,2 м в плане); свою ванну, умывальник и унитаз ставит furnishBath. */
 function clearBaths(scene: Object3D, plan: Plan, glass: Box3[]) {
   // контур санузла с запасом 0,45 м: столешницы в нишах лежали за контуром заливки и оставались висеть в воздухе
-  const boxes = roomRects(plan, glass, (n) => n.toLowerCase().includes('toilet & bath')).map(({ rect, level }) => new Box3(new Vector3(rect.x0 - 0.45, level - 0.3, rect.z0 - 0.45), new Vector3(rect.x1 + 0.45, level + 2.3, rect.z1 + 0.45)));
+  const boxes = roomRects(plan, glass, (n) => n.toLowerCase().includes('toilet')).map(({ rect, level }) => new Box3(new Vector3(rect.x0 - 0.45, level - 0.3, rect.z0 - 0.45), new Vector3(rect.x1 + 0.45, level + 2.3, rect.z1 + 0.45)));
   stripComponents(scene, boxes, (sz) => sz.y < 1.5 && Math.max(sz.x, sz.z) < 3.2 && Math.max(sz.x, sz.y, sz.z) > 0.12, ['walnut', 'plants', 'default', 'textured', 'stucco', 'paint', 'ceiling', 'slats', 'mosaic', 'wallstone', 'paving'], 'bath', plan.villa); // paving: каменные столешницы Revit классифицируются как мощение
   // столешница виллы 1 сцеплена с плитой пола в один компонент (9,7 × 6,4 м) — по компонентам не ловится; внутри контура
   // санузла (+0,35 м за контур, ниши в стенах) срезаем предметы в полосе 45–130 см над полом: пол, подиумы и стены остаются
@@ -225,6 +225,18 @@ function clearBaths(scene: Object3D, plan: Plan, glass: Box3[]) {
   // у стен санузла центр больших треугольников попадал в полосу, стена исчезала целиком, и в соседних спальнях пропадали кровати
   for (const m of targets) { const piece = splitOutBoxes(m, bands, true); if (piece) { cut += (piece.getAttribute('position').count / 3) | 0; piece.dispose(); } }
   if (cut) console.info('[bath]', plan.villa, 'срезано треугольников в полосе над полом санузлов:', cut);
+}
+/** Кухонная сантехника Revit (белые мойка и плита без текстур) в небольших кухнях открытой планировки: в зоне метки
+ *  кухни убираются отдельные предметы до 1,3 м высотой; гарнитур ставит furnishOpenPlan/furnishKitchen. Большая
+ *  «кухня» виллы 1 (44 м², обставлена в Revit столом и диваном) не трогается. */
+function clearKitchens(scene: Object3D, plan: Plan, glass: Box3[]) {
+  const boxes = roomRects(plan, glass, (n) => n.toLowerCase().includes('kitchen')).filter((r) => !!r.area && r.area < 20).map(({ rect, level, x, z, area }) => {
+    const h = Math.sqrt(area ?? 9) * 0.6 + 0.3;
+    return new Box3(new Vector3(Math.max(rect.x0 - 0.3, x - h), level + 0.05, Math.max(rect.z0 - 0.3, z - h)), new Vector3(Math.min(rect.x1 + 0.3, x + h), level + 1.6, Math.min(rect.z1 + 0.3, z + h)));
+  });
+  stripComponents(scene, boxes, (sz) => sz.y < 1.3 && Math.max(sz.x, sz.z) < 2.6 && Math.max(sz.x, sz.y, sz.z) > 0.04 && (sz.y > 0.02 || Math.max(sz.x, sz.z) < 0.7), ['default', 'textured', 'walnut', 'stucco', 'paint', 'ceiling', 'slats', 'mosaic', 'wallstone', 'paving'], 'kitchen', plan.villa);
+  // стеклянная дверца духовки Revit — отдельный меш роли «стекло»: без неё плита оставляла висящий прямоугольник, а место считалось витриной
+  stripComponents(scene, boxes, (sz) => Math.max(sz.x, sz.y, sz.z) < 0.8 && Math.max(sz.x, sz.y, sz.z) > 0.1, ['glass'], 'kitchen-glass', plan.villa);
 }
 /** Кровати Revit — белые платформы и матрасы без текстур: в спальнях компоненты размером с кровать (высота до 1 м,
  *  1,4–3,4 × 0,8–2,6 м в плане) и мелочь на них (подушки) убираются; кровать по стайл-гайду ставит furnishBedroom. */
@@ -313,7 +325,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const plan = data.plans[MODEL_IDS[k]];
       if (plan && !g.scene.getObjectByName('furniture')) {
         const t1 = performance.now();
-        if (!g.scene.userData.balustersDone) { const gl0 = glassBoxes(g.scene); stripBalusters(g.scene, plan); clearBaths(g.scene, plan, gl0); clearBeds(g.scene, plan, gl0); g.scene.userData.balustersDone = true; }
+        if (!g.scene.userData.balustersDone) { const gl0 = glassBoxes(g.scene); stripBalusters(g.scene, plan); clearBaths(g.scene, plan, gl0); clearBeds(g.scene, plan, gl0); clearKitchens(g.scene, plan, gl0); g.scene.userData.balustersDone = true; }
         const colT = buildCollider(g.scene); const rayS = new Ray(new Vector3(), new Vector3(0, -1, 0));
         const support = colT ? (x: number, y: number, z: number) => { rayS.origin.set(x, y + 0.35, z); const hs = colT.bvh.raycast(rayS, DoubleSide); return hs.some((ht) => ht.distance < 0.9); } : null;
         // препятствие: между полом +12 см и +1,5 м над точкой есть поверхность модели (мебель Revit, подоконники, выступы)
@@ -321,10 +333,15 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         const obstacle = colT ? (x: number, y: number, z: number) => { rayS.origin.set(x, y + 1.5, z); const hs = colT.bvh.raycast(rayS, DoubleSide); let top: number | null = null; for (const ht of hs) if (ht.distance > 0.02 && ht.distance < 1.5 - 0.12) { const hy = y + 1.5 - ht.distance; if (top === null || hy > top) top = hy; } return top; } : null;
         // есть ли стена: луч горизонтально в сторону n от точки в 0,4 м перед стеной на высоте 1,3 м, попадание ближе 0,9 м
         const rayH = new Ray(); const wallAt = colT ? (x: number, y: number, z: number, nx: number, nz: number) => { rayH.origin.set(x - nx * 0.4, y + 1.3, z - nz * 0.4); rayH.direction.set(nx, 0, nz).normalize(); return colT.bvh.raycast(rayH, DoubleSide).some((ht) => ht.distance < 0.9); } : null;
+        // расстояние до ближайшей стены по горизонтальному лучу на высоте 1,3 м (до 2 м) — привязка контура комнаты к стене
+        const rayD = new Ray(); const wallDist = colT ? (x: number, y: number, z: number, nx: number, nz: number) => { rayD.origin.set(x, y + 1.3, z); rayD.direction.set(nx, 0, nz).normalize(); let best: number | null = null; for (const ht of colT.bvh.raycast(rayD, DoubleSide)) if (ht.distance < 2 && (best === null || ht.distance < best)) best = ht.distance; return best; } : null;
+        // мощёная поверхность под точкой: тот же луч вниз, но по коллайдеру без газона, рельефа и озеленения (диваны и столы террас — не на траву)
+        const colP = buildColliderFromParts(collectColliderParts(g.scene, [], undefined, (m) => ['ground', 'terrain', 'plants'].includes(m.userData.role as string))); const rayP = new Ray(new Vector3(), new Vector3(0, -1, 0));
+        const paved = colP ? (x: number, y: number, z: number) => { rayP.origin.set(x, y + 0.35, z); return colP.bvh.raycast(rayP, DoubleSide).some((ht) => ht.distance < 0.9); } : null;
         // верх любой поверхности над точкой в пределах 4 м (для уклона лестничных маршей)
         const topAt = colT ? (x: number, y: number, z: number) => { rayS.origin.set(x, y + 4, z); const hs = colT.bvh.raycast(rayS, DoubleSide); let top: number | null = null; for (const ht of hs) if (ht.distance > 0.02 && ht.distance < 3.95) { const hy = y + 4 - ht.distance; if (top === null || hy > top) top = hy; } return top; } : null;
-        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex(), detailMaps(tex.walnut), waterBoxes(g.scene), support, obstacle, wallAt, topAt);
-        colT?.geometry.dispose();
+        const furn = furnishVilla(plan, glassBoxes(g.scene), cfg0.passages ?? [], artTex(), detailMaps(tex.walnut), waterBoxes(g.scene), support, obstacle, wallAt, topAt, wallDist, paved);
+        colT?.geometry.dispose(); colP?.geometry.dispose();
         furn.applyMatrix4(g.scene.matrixWorld.clone().invert()); g.scene.add(furn); g.scene.updateMatrixWorld(true);
         console.info('[furniture]', MODEL_IDS[k], furn.children.map((m) => ((m as Mesh).geometry.getAttribute('position').count / 3) | 0), 'tris in', (performance.now() - t1) | 0, 'ms');
       }

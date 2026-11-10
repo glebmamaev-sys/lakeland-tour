@@ -527,6 +527,8 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
       m.roughness = 0.88; m.metalness = 0; m.side = DoubleSide;
       // бетон плит/парапетов вилл 2.x и 3 (0.67,0.63,0.61) под зеленоватым небом уходит в оливковый — светлее и нейтральнее
       if (near(m.color, 0.67, 0.63, 0.61)) m.color.set('#dcd8d2');
+      // розовая заглушка Revit (#e2bfbf) — простенки у кухни вилл 2.x без назначенного материала: красим как стены
+      if (m.color.r > 0.6 && m.color.r - m.color.g > 0.15 && Math.abs(m.color.g - m.color.b) < 0.03) m.color.set('#e6e3dc');
       // чисто чёрные/очень тёмные «служебные» цвета Revit слегка поднимаем, иначе проваливаются в тень
       const lum = 0.3 * m.color.r + 0.59 * m.color.g + 0.11 * m.color.b;
       if (lum < 0.08) m.color.setScalar(0.18);
