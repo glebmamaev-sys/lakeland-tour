@@ -6,9 +6,9 @@ import { useThree } from '@react-three/fiber';
 import { OrbitControls, useGLTF, useTexture } from '@react-three/drei';
 import {
   CatmullRomCurve3,
-  Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, ExtrudeGeometry,
+  Box3, BufferAttribute, BufferGeometry, Color, DoubleSide,
   Float32BufferAttribute, Group, LOD, Matrix4, Mesh, MeshStandardMaterial, type Object3D,
-  Ray, RepeatWrapping, Shape, SRGBColorSpace, type Texture, Vector3, type Intersection,
+  Ray, RepeatWrapping, SRGBColorSpace, type Texture, Vector3, type Intersection,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { applyMaterialRules, openDoors, splitComponents } from './materials';
@@ -17,7 +17,7 @@ import { MODELS } from './models';
 import { asset } from './assets';
 import { makeRamp } from './Villa';
 import { Player } from './Player';
-import { Frangipani, Palms, Shrubs, type Plant } from './world/Vegetation';
+import { Frangipani, Palms, Shrubs, Trees, type Plant } from './world/Vegetation';
 import { Lagoon, WATER_TIME, makeBottomTexture, type Bottom } from './world/Lagoon';
 import { buildPathNetwork, distToPaths, pathRibbon, type PathNet } from './world/Paths';
 import { makeArtTexture, makeNoiseTexture, makeWeaveTexture, type DetailMaps } from './world/textures';
@@ -28,6 +28,8 @@ import { buildShop } from './world/Shop';
 import { buildEntrance, planGate, type Gate } from './world/Entrance';
 import { mergeByMaterial } from './world/MergeLod';
 import { buildPathLamps, PathLamps, type Lamps } from './world/PathLamps';
+import { buildRoads, buildVillage } from './world/Surroundings';
+import { onEve } from './world/DayTime';
 import { Grass } from './world/Grass';
 import { planTerraces, wallGeometry, type Terraces } from './world/Terraces';
 import { gradePaths, stepGeometry, type Graded } from './world/PathGrade';
@@ -94,7 +96,7 @@ const placePalmShort = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r *
 const placeBush = (p: Plant) => ({ x: p.x, y: p.y + 0.1, z: p.z, yaw: p.r * 6.28, height: 0.7 + p.s * 0.9 });
 const placeTree = (p: Plant) => ({ x: p.x, y: p.y + 0.05, z: p.z, yaw: p.r * 6.28, height: 4 + p.s * 2.5 });
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
-type BuiltScene = { lamps: Lamps | null; entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; arrive: { x: number; z: number; yaw: number } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
+type BuiltScene = { roads: BufferGeometry | null; windows: BufferGeometry | null; trees: Plant[]; lamps: Lamps | null; entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; arrive: { x: number; z: number; yaw: number } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
@@ -863,7 +865,12 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       let y = raw;
       // в прямоугольнике сетки участка рельеф рисует сетка участка (0,5 м): окрестности прячем под неё, иначе
       // вершины SRTM (10 м) торчат «пирамидами» между границей участка и подведённой к виллам лагуной
-      if (inPoly(x, z, c.site.boundary) || inGrid(x, z, 2)) y = Math.min(y, W - 3);
+      // Вершина окрестностей внутри сетки участка прячется под неё. Раньше все такие вершины опускались под воду — и
+      // треугольник между последней наружной вершиной и первой внутренней нырял: вдоль края сетки шла канава до 10 м
+      // шириной, в ней проступала вода. Теперь под воду уходят только вершины в глубине сетки (все соседи тоже внутри),
+      // а кольцо у края остаётся на своей высоте, на 0,35 м ниже сетки участка, которая его и накрывает
+      const inG = (px: number, pz: number) => inPoly(px, pz, c.site.boundary) || inGrid(px, pz, 2);
+      if (inG(x, z)) y = isWater(x, z, raw) || (inG(x - st, z) && inG(x + st, z) && inG(x, z - st) && inG(x, z + st) && inG(x - st, z - st) && inG(x + st, z + st) && inG(x - st, z + st) && inG(x + st, z - st)) ? Math.min(y, W - 3) : raw - 0.35;
       else if (isWater(x, z, raw)) y = Math.min(y, W - 3); // вода вне сетки участка — глубоко (сквозь непрозрачную воду дна не видно)
       dp.set([x, y, z], k * 3); du.set([x / 12, z / 12], k * 2);
       const lc = coverAt(x, z); const cc = y < W + 1.5 ? shore : (lc === 2 ? openCol : landCol); dcol.set([cc.r, cc.g, cc.b], k * 3);
@@ -887,17 +894,11 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       return u + v <= 1 ? ya + (yb - ya) * u + (yc - ya) * v : yd + (yc - yd) * (1 - u) + (yb - yd) * (1 - v); };
     const hOut = (x: number, z: number) => { const s = heightAt(x, z); if (s === null) return null; return inPoly(x, z, c.site.boundary) || inGrid(x, z, 0) ? s : Math.max(s, drawnAt(x, z)); };
     const entrance = gate ? buildEntrance(gate, c.site.boundary, hOut, isLand, c.osm.roads) : null;
-    // соседние дома (OSM): коробки 4 м с плоской крышей
-    const hg: BufferGeometry[] = [];
-    for (const poly of c.osm.buildings) {
-      if (poly.length < 4) continue;
-      const cx = poly.reduce((s, p) => s + p[0], 0) / poly.length, cz = poly.reduce((s, p) => s + p[1], 0) / poly.length;
-      const y = heightAt(cx, cz); if (y === null) continue;
-      const shape = new Shape(poly.map(([x, z]) => ({ x, y: -z }) as never));
-      const g = new ExtrudeGeometry(shape, { depth: 3.6 + ((cx * 7 + cz * 3) % 1.5 + 1.5) % 1.5, bevelEnabled: false });
-      g.rotateX(-Math.PI / 2); g.translate(0, y - 0.3, 0); hg.push(g);
-    }
-    const nbHouses = hg.length ? mergeGeometries(hg, true) : null;
+    // окружение (Surroundings.ts): дороги карты лентами по рельефу и деревня — дома с двускатными крышами по контурам OSM
+    const roadsB = buildRoads(c.osm.roads, hOut, (x, z) => inPoly(x, z, c.site.boundary));
+    const village = buildVillage(c.osm.buildings, heightAt);
+    const nbHouses = village.houses;
+    console.info('[surroundings]', 'дорог', (roadsB.length / 1000).toFixed(1), 'км, домов', village.count);
     // подпорные стенки и лестницы террас (каменные), лотосы у берега лагуны
     const walls = terr ? wallGeometry(terr.walls) : null; const stairG = { treads: graded ? stepGeometry(graded.steps) : null, cheeks: null as BufferGeometry | null }; void inHouseMask;
     // верх ступени под точкой (для персонажей: игрок ходит по коллайдеру ступеней сам)
@@ -926,7 +927,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       if (r() > pKeep) continue;
       if (inPoly(px, pz, c.site.boundary)) continue;
       const y = heightAt(px, pz); if (y === null) continue;
-      const ps = r(), pr = r(); if (entrance?.keepOut(px, pz)) continue; // на парковке и подъездной дороге пальм нет (случайный ряд не сдвигается)
+      const ps = r(), pr = r(); if (entrance?.keepOut(px, pz) || roadsB.near(px, pz, 5.5) || village.spots.some((q) => Math.abs(q[0] - px) < 9 && Math.abs(q[1] - pz) < 9)) continue; // на парковке, дорогах и домах пальм нет (случайный ряд не сдвигается)
       (Math.hypot(px, pz) < 260 ? near : far).push({ x: px, y: y - 0.2, z: pz, s: ps, r: pr });
     }
     for (let k = 0; k < 900; k++) {
@@ -935,6 +936,13 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const y = siteAt(px, pz); if (y === null) continue;
       near.push({ x: px, y: y - 0.2, z: pz, s: r(), r: r() });
     }
+    // лиственные деревья окрестностей: рощи по карте растительности (лес — густо, поля — редко), не на дорогах и домах
+    const trees: Plant[] = []; { const rt = rng(99); const TR = input.mobile ? 800 : 1300;
+      for (let z = -TR; z < TR; z += 24) for (let x = -TR; x < TR; x += 24) {
+        const px = x + (rt() - 0.5) * 22, pz = z + (rt() - 0.5) * 22; const lc = coverAt(px, pz); const keep = lc === 1 ? 0.6 : lc === 2 ? 0.05 : lc === 0 ? 0.22 : 0; const k = rt(), ts = rt(), tr = rt();
+        if (k > keep || inPoly(px, pz, c.site.boundary) || inGrid(px, pz, -6) || entrance?.keepOut(px, pz) || roadsB.near(px, pz, 7) || village.spots.some((q) => Math.abs(q[0] - px) < 10 && Math.abs(q[1] - pz) < 10)) continue;
+        const y = heightAt(px, pz); if (y === null || y < W + 0.6) continue; trees.push({ x: px, y: y - 0.2, z: pz, s: ts, r: tr });
+      } }
     // кусты: вдоль контуров домов (с отступом 1,5–2,5 м, не у входов) и россыпью по газону; франжипани вдоль дорожек
     const shrubs: Plant[] = [], frangipani: Plant[] = [];
     for (const hs of houses) {
@@ -972,9 +980,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       return true;
     };
     (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
-    const builtNow = { lamps, entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, arrive: entrance?.arrive ?? null, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
+    const builtNow = { roads: roadsB.geom, windows: village.windows, trees, lamps, entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, arrive: entrance?.arrive ?? null, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
-    (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, lamps: lamps.count, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
+    (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
   }, [data, instances, houses]);
 
   // коллайдер всего комплекса: дома (с проёмами дверей в системе координат каждого дома, без растений и штор),
@@ -1078,8 +1086,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
   const siteMat = useMemo(() => { const t = grass.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.needsUpdate = true;
     return grassVary(new MeshStandardMaterial({ map: t, vertexColors: true, roughness: 1 }), 0.012, true); }, [grass, data]);
   const demMat = useMemo(() => grassVary(new MeshStandardMaterial({ map: siteMat.map, vertexColors: true, roughness: 1 }), 0.006), [siteMat]);
-  const roofMat = useMemo(() => new MeshStandardMaterial({ color: '#b5674a', roughness: 0.9 }), []);
-  const wallMat = useMemo(() => new MeshStandardMaterial({ color: '#efe9de', roughness: 0.95 }), []);
+  // окружение: дома деревни (цвет стен и крыш по вершинам), их окна (вечером светятся), асфальт дорог
+  const villageMat = useMemo(() => new MeshStandardMaterial({ vertexColors: true, roughness: 0.92, side: DoubleSide }), []);
+  const windowMat = useMemo(() => { const m = new MeshStandardMaterial({ color: '#39424a', roughness: 0.3, emissive: '#ffc777', emissiveIntensity: 0, side: DoubleSide }); onEve((k) => { m.emissiveIntensity = 2.6 * k; }); return m; }, []);
+  const roadMat = useMemo(() => new MeshStandardMaterial({ color: '#77736c', roughness: 0.97, side: DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }), []);
   const skirtMat = useMemo(() => { const t = tex.stucco.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.needsUpdate = true; return new MeshStandardMaterial({ map: t, color: '#e6e1d6', roughness: 0.95, side: DoubleSide }); }, [tex.stucco]);
   const retMat = useMemo(() => { const t = tex.wallstone.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.needsUpdate = true;
     return new MeshStandardMaterial({ map: t, color: '#cfc6b4', roughness: 0.95, side: DoubleSide }); }, [tex.wallstone]);
@@ -1116,7 +1126,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           <>
             <mesh geometry={built.site} material={siteMat} receiveShadow />
             <mesh geometry={built.dem} material={demMat} receiveShadow />
-            {built.houses && <mesh geometry={built.houses} material={[roofMat, wallMat]} castShadow receiveShadow />}
+            {built.houses && <mesh geometry={built.houses} material={villageMat} castShadow receiveShadow />}
+            {built.windows && <mesh geometry={built.windows} material={windowMat} />}
+            {built.roads && <mesh geometry={built.roads} material={roadMat} receiveShadow />}
             {built.paths && <mesh geometry={built.paths} material={pathMat} receiveShadow />}
             {built.lamps && <PathLamps lamps={built.lamps} />}
             {built.entrance?.paved && <mesh geometry={built.entrance.paved} material={driveMat} receiveShadow />}
@@ -1128,6 +1140,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           </>
         )}
       </group>
+      {built && built.trees.length > 0 && <Trees items={built.trees} />}
       {built && (PROVEG
         ? <><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>
         : <Suspense fallback={<><Palms near={built.near} far={built.far} /><Shrubs items={built.shrubs} /><Frangipani items={built.frangipani} /></>}>

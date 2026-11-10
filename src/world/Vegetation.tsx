@@ -133,6 +133,19 @@ function Instanced({ geometry, material, items, place, shadow = true }: { geomet
   return <instancedMesh ref={ref} args={[geometry, material, items.length]} castShadow={shadow} receiveShadow={shadow} frustumCulled={false} />;
 }
 
+/** Лиственное дерево окрестностей: ствол и крона из двух многогранников, 50 треугольников; высота ≈ 6 м (масштабируется). */
+export function makeBroadleaf(seed = 3): BufferGeometry {
+  const trunk = new CylinderGeometry(0.14, 0.26, 3.0, 5, 1, true); trunk.translate(0, 1.5, 0);
+  const a = new IcosahedronGeometry(2.3, 0); a.scale(1, 0.8, 1); a.translate(0, 4.2, 0); const b = new IcosahedronGeometry(1.6, 0); b.scale(1, 0.85, 1); b.translate(0.9, 5.4, 0.4);
+  const m = mergeGeometries([paint(ni(trunk), new Color('#6b5a45'), 0.05, seed), paint(ni(a), new Color('#3f7435'), 0.16, seed + 1), paint(ni(b), new Color('#4f8a3c'), 0.16, seed + 2)].map((g) => { g.deleteAttribute('uv'); return g; }), false)!; m.computeVertexNormals(); return m;
+}
+/** Рощи окрестностей: без теней (карта теней покрывает только участок). */
+export function Trees({ items }: { items: Plant[] }) {
+  const g = useMemo(() => makeBroadleaf(3), []);
+  const place = (p: Plant, m: Matrix4) => { const s = 0.75 + p.s * 0.9; m.compose(new Vector3(p.x, p.y, p.z), new Quaternion().setFromAxisAngle(up, p.r * 6.28), new Vector3(s * (0.85 + p.r * 0.4), s, s * (0.85 + p.r * 0.4))); };
+  return <Instanced geometry={g} material={leafMat} items={items} place={place} shadow={false} />;
+}
+
 /** Пальмы: ближние (детальная крона) и дальние (простая); у каждой свой наклон и размер. */
 export function Palms({ near, far }: { near: Plant[]; far: Plant[] }) {
   const trunk = useMemo(() => makeTrunk(), []), trunkLite = useMemo(() => makeTrunk(true), []);

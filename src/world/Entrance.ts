@@ -46,8 +46,8 @@ export function planGate(B: XZ[], blocked: (x: number, z: number) => boolean, la
 }
 
 /** Лента по ломаной: ширина w, высота по hAt + lift, UV в метрах / 3, боковые юбки вниз на 0,5 м (закрывают зазор над рельефом). */
-function ribbon(line: XZ[], w: number, hAt: H, lift: number): BufferGeometry | null {
-  const pts: XZ[] = []; for (let i = 0; i < line.length - 1; i++) { const a = line[i], b = line[i + 1]; const L = Math.hypot(b[0] - a[0], b[1] - a[1]); const n = Math.max(1, Math.ceil(L / 1.5)); for (let k = i ? 1 : 0; k <= n; k++) pts.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]); }
+export function ribbon(line: XZ[], w: number, hAt: H, lift: number, step = 1.5, skirt = true): BufferGeometry | null {
+  const pts: XZ[] = []; for (let i = 0; i < line.length - 1; i++) { const a = line[i], b = line[i + 1]; const L = Math.hypot(b[0] - a[0], b[1] - a[1]); const n = Math.max(1, Math.ceil(L / step)); for (let k = i ? 1 : 0; k <= n; k++) pts.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]); }
   if (pts.length < 2) return null; const P: number[] = [], U: number[] = [], idx: number[] = []; let rows = 0;
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i], q = pts[Math.min(pts.length - 1, i + 1)], o = pts[Math.max(0, i - 1)]; let dx = q[0] - o[0], dz = q[1] - o[1]; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
@@ -55,7 +55,7 @@ function ribbon(line: XZ[], w: number, hAt: H, lift: number): BufferGeometry | n
     const yl = Math.max(hl, hc - 0.4) + lift, yr = Math.max(hr, hc - 0.4) + lift; const b = P.length / 3;
     P.push(p[0] - sx, yl - 0.5, p[1] - sz, p[0] - sx, yl, p[1] - sz, p[0] + sx, yr, p[1] + sz, p[0] + sx, yr - 0.5, p[1] + sz);
     U.push((p[0] - sx) / 3, (p[1] - sz) / 3 + 0.2, (p[0] - sx) / 3, (p[1] - sz) / 3, (p[0] + sx) / 3, (p[1] + sz) / 3, (p[0] + sx) / 3, (p[1] + sz) / 3 + 0.2);
-    if (rows) { const a = b - 4; for (let k = 0; k < 3; k++) idx.push(a + k, a + k + 1, b + k, a + k + 1, b + k + 1, b + k); }
+    if (rows) { const a = b - 4; for (let k = skirt ? 0 : 1; k < (skirt ? 3 : 2); k++) idx.push(a + k, a + k + 1, b + k, a + k + 1, b + k + 1, b + k); }
     rows++;
   }
   if (!idx.length) return null; const g = new BufferGeometry(); g.setAttribute('position', new Float32BufferAttribute(P, 3)); g.setAttribute('uv', new Float32BufferAttribute(U, 2)); g.setIndex(idx); g.computeVertexNormals(); return g;
@@ -94,7 +94,7 @@ export function buildEntrance(gate: Gate, B: XZ[], hAt: H, land: (x: number, z: 
   // подъездная дорога: от дальнего края парковки к ближайшей дороге карты, сама эта дорога — в пределах 170 м
   const lotOut = W(0, V1 - 0.5); const road = nearestOnRoads(roads, lotOut[0], lotOut[1]); const drive: XZ[] = [lotOut];
   if (road) { const mid = W(0, V1 + 8); drive.push(mid, [road.x, road.z]); const d = ribbon(drive, 4.6, hAt, 0.14); if (d) paved.push(d);
-    const part = road.road.filter((q) => Math.hypot(q[0] - road.x, q[1] - road.z) < 170); if (part.length > 1) { const r = ribbon(part, 5.6, hAt, 0.1); if (r) paved.push(r); } }
+  } // сама дорога карты рисуется вместе с остальными (Surroundings.buildRoads)
   // короткий выход от ворот на площадку (полоса у самой границы — между оградой и парковкой)
   { const a = ribbon([W(0, -1.6), W(0, V0 + 0.6)], 3.6, hAt, 0.13); if (a) paved.push(a); }
   const yAt = (x: number, z: number) => hAt(x, z) ?? 0;
@@ -128,7 +128,7 @@ export function buildEntrance(gate: Gate, B: XZ[], hAt: H, land: (x: number, z: 
   const keepOut = (x: number, z: number) => {
     const u = (x - gx) * tx + (z - gz) * tz, v = (x - gx) * nx + (z - gz) * nz; if (Math.abs(u) < HU + 3 && v > -2 && v < V1 + 3) return true;
     for (let i = 0; i < drive.length - 1; i++) { const a = drive[i], b = drive[i + 1]; const dx = b[0] - a[0], dz = b[1] - a[1]; const L2 = dx * dx + dz * dz || 1; const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / L2)); if (Math.hypot(a[0] + dx * t - x, a[1] + dz * t - z) < 5) return true; }
-    const r = nearestOnRoads(road ? [road.road] : [], x, z); return !!r && r.d < 5.5;
+    return false;
   };
   const lotC = W(0, (V0 + V1) / 2); const arr = W(0, V1 - 3);
   return { paved: paved.length ? F.merge(paved) : null, solid: solid.length ? F.merge(solid) : null, keepOut, lot: { cx: lotC[0], cz: lotC[1] }, arrive: { x: arr[0], z: arr[1], yaw: Math.atan2(nx, nz) } };
