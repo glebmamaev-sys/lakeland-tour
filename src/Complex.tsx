@@ -270,11 +270,11 @@ function clearBeds(scene: Object3D, plan: Plan, glass: Box3[]) {
   // пол (на отметке уровня) и стены остаются, платформа/матрас уходят
   const bands = roomRects(plan, glass, (n) => n.toLowerCase().includes('bedroom')).filter(({ rect }) => rect.x1 - rect.x0 > 1.2 && rect.z1 - rect.z0 > 1.2).map(({ rect, level }) => new Box3(new Vector3(rect.x0 + 0.3, level + 0.06, rect.z0 + 0.3), new Vector3(rect.x1 - 0.3, level + 0.8, rect.z1 - 0.3)));
   let cut = 0; const targets: Mesh[] = []; scene.traverse((o) => { const m = o as Mesh; if (m.isMesh && !m.userData.curtain && ['default', 'textured', 'stucco', 'paint', 'ceiling'].includes(m.userData.role as string)) targets.push(m); });
-  for (const m of targets) { const piece = splitOutBoxes(m, bands); if (piece) { cut += (piece.getAttribute('position').count / 3) | 0; piece.dispose(); } }
+  for (const m of targets) { const piece = splitOutBoxes(m, bands, false, true); if (piece) { cut += (piece.getAttribute('position').count / 3) | 0; piece.dispose(); } }
   if (cut) console.info('[beds]', plan.villa, 'срезано треугольников в полосе над полом спален:', cut);
 }
 /** Вырезает из меша треугольники с центром (мир) внутри любой из коробок: возвращает их геометрию, меш остаётся без них. */
-function splitOutBoxes(m: Mesh, boxes: Box3[], strict = false): BufferGeometry | null {
+function splitOutBoxes(m: Mesh, boxes: Box3[], strict = false, lowOnly = false): BufferGeometry | null {
   const g = m.geometry, pos = g.getAttribute('position') as BufferAttribute, uv = g.getAttribute('uv') as BufferAttribute | undefined, idx = g.index;
   const n = idx ? idx.count / 3 : pos.count / 3; m.updateWorldMatrix(true, false);
   const PI: number[] = [], UI: number[] = [], PO: number[] = [], UO: number[] = []; const w = new Vector3(), c = new Vector3(); const vs = [new Vector3(), new Vector3(), new Vector3()];
@@ -282,7 +282,10 @@ function splitOutBoxes(m: Mesh, boxes: Box3[], strict = false): BufferGeometry |
     const ids = [0, 1, 2].map((k) => (idx ? idx.getX(t * 3 + k) : t * 3 + k));
     c.set(0, 0, 0); let k3 = 0; for (const i of ids) { w.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(m.matrixWorld); c.addScaledVector(w, 1 / 3); vs[k3++].copy(w); }
     // strict: все три вершины внутри одной коробки — крупные треугольники стен и плит (вершины у пола и потолка) не задеваются
-    const inside = strict ? boxes.some((b) => b.containsPoint(vs[0]) && b.containsPoint(vs[1]) && b.containsPoint(vs[2])) : boxes.some((b) => b.containsPoint(c));
+    // lowOnly (срез кроватей): по центру, но только низкие треугольники (верх не выше коробки + 0,25 м). У стойки дверной коробки или перегородки нижний
+    // треугольник грани имеет центр на трети высоты — попадал в полосу 6–80 см и срезался, верхний оставался «шипом»
+    const top = Math.max(vs[0].y, vs[1].y, vs[2].y);
+    const inside = strict ? boxes.some((b) => b.containsPoint(vs[0]) && b.containsPoint(vs[1]) && b.containsPoint(vs[2])) : boxes.some((b) => b.containsPoint(c) && (!lowOnly || top <= b.max.y + 0.25));
     const P = inside ? PI : PO, U = inside ? UI : UO;
     for (const i of ids) { P.push(pos.getX(i), pos.getY(i), pos.getZ(i)); if (uv) U.push(uv.getX(i), uv.getY(i)); }
   }
