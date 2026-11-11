@@ -27,13 +27,14 @@ export function mergeByMaterial(root: Object3D, maxSize = 32): [number, number] 
   for (const list of groups.values()) {
     if (list.length < 2) continue;
     const mat = list[0].material as MeshStandardMaterial; const needUv = !!(mat.map || mat.normalMap) && list.every((m) => !!m.geometry.getAttribute('uv'));
-    const indexed = list.every((m) => !!m.geometry.index); const parts: BufferGeometry[] = [];
+    const indexed = list.every((m) => !!m.geometry.index); const needFac = list.some((m) => !!m.geometry.getAttribute('aFac')); const parts: BufferGeometry[] = [];
     for (const m of list) {
       const src = indexed ? m.geometry : m.geometry.index ? m.geometry.toNonIndexed() : m.geometry; const g = new BufferGeometry();
       g.setAttribute('position', f32(src.getAttribute('position') as BufferAttribute, 3));
       const n = src.getAttribute('normal') as BufferAttribute | undefined; if (n) g.setAttribute('normal', f32(n, 3));
       if (needUv) g.setAttribute('uv', f32(src.getAttribute('uv') as BufferAttribute, 2));
       if (indexed) g.setIndex(src.index!.clone());
+      if (needFac) { const fa = src.getAttribute('aFac') as BufferAttribute | undefined; g.setAttribute('aFac', fa ? new BufferAttribute((fa.array as Uint8Array).slice(), 2, true) : new BufferAttribute(new Uint8Array(src.getAttribute('position').count * 2), 2, true)); } // метка фасада (Facade.ts)
       g.applyMatrix4(inv.clone().multiply(m.matrixWorld)); if (!n) g.computeVertexNormals(); else g.normalizeNormals();
       { const c = (m.material as MeshStandardMaterial).color; const cnt = g.getAttribute('position').count; const col = new Float32Array(cnt * 3); for (let i = 0; i < cnt; i++) { col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b; } g.setAttribute('color', new BufferAttribute(col, 3)); }
       parts.push(g);

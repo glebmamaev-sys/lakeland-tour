@@ -27,6 +27,8 @@ import { Npcs } from './world/Characters';
 import { buildShop } from './world/Shop';
 import { buildEntrance, planGate, type Gate } from './world/Entrance';
 import { mergeByMaterial } from './world/MergeLod';
+import { FACADE_TONES, facadeStats, markFacade, setFacadeHouses } from './world/Facade';
+import { facadeDebug } from './world/textures';
 import { buildPathLamps, PathLamps, type Lamps } from './world/PathLamps';
 import { buildRoads, buildVillage } from './world/Surroundings';
 import { onEve } from './world/DayTime';
@@ -291,16 +293,18 @@ function splitOutBoxes(m: Mesh, boxes: Box3[], strict = false): BufferGeometry |
 function keepInside(m: Mesh, box: Box3): BufferGeometry {
   const g = m.geometry, pos = g.getAttribute('position') as BufferAttribute, uv = g.getAttribute('uv') as BufferAttribute | undefined, idx = g.index;
   const n = idx ? idx.count / 3 : pos.count / 3; m.updateWorldMatrix(true, false);
+  const fac = g.getAttribute('aFac') as BufferAttribute | undefined; const F: number[] = []; // метка фасада (Facade.ts) переносится в новую геометрию
   const P: number[] = [], U: number[] = []; const w = new Vector3();
   for (let t = 0; t < n; t++) {
     const ids = [0, 1, 2].map((k) => (idx ? idx.getX(t * 3 + k) : t * 3 + k));
     let cx = 0, cz = 0;
     for (const i of ids) { w.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(m.matrixWorld); cx += w.x / 3; cz += w.z / 3; }
     if (cx < box.min.x || cx > box.max.x || cz < box.min.z || cz > box.max.z) continue;
-    for (const i of ids) { P.push(pos.getX(i), pos.getY(i), pos.getZ(i)); if (uv) U.push(uv.getX(i), uv.getY(i)); }
+    for (const i of ids) { P.push(pos.getX(i), pos.getY(i), pos.getZ(i)); if (uv) U.push(uv.getX(i), uv.getY(i)); if (fac) F.push(fac.array[i * 2], fac.array[i * 2 + 1]); }
   }
   const ng = new BufferGeometry(); ng.setAttribute('position', new Float32BufferAttribute(P, 3));
   if (uv) ng.setAttribute('uv', new Float32BufferAttribute(U, 2));
+  if (fac) ng.setAttribute('aFac', new BufferAttribute(new Uint8Array(F), 2, true));
   ng.computeVertexNormals(); return ng;
 }
 
@@ -337,7 +341,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // по мировым габаритам, без поворота «высота» меша попадает в z и земля классифицируется как мощение
       const cfg0 = MODELS[MODEL_IDS[k]];
       g.scene.rotation.set(...cfg0.rotation); g.scene.position.set(...cfg0.offset);
-      g.scene.updateMatrixWorld(true); applyMaterialRules(g.scene, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint });
+      g.scene.updateMatrixWorld(true); applyMaterialRules(g.scene, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint, facade: FACADE_TONES[MODEL_IDS[k]] });
       const t0 = performance.now(); const nd = openDoors(g.scene, cfg0.passages ?? []); // двери открыты: полотна в проёмах убраны
       if (nd) console.info('[openDoors]', MODEL_IDS[k], nd, 'tris removed in', (performance.now() - t0) | 0, 'ms');
       // интерьеры по стайл-гайду: мебель в координатах виллы, кладём внутрь шаблона (клоны домов её наследуют)
@@ -375,19 +379,23 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         indoorMasks.set(MODEL_IDS[k], buildIndoor(plan, gl, greens));
       }
       (window as unknown as { __indoor: unknown }).__indoor = indoorMasks;
+      const imask = indoorMasks.get(MODEL_IDS[k]);
+      if (imask && !g.scene.userData.facade) { g.scene.updateMatrixWorld(true); facadeStats[MODEL_IDS[k]] = markFacade(g.scene, imask); console.info('[facade]', MODEL_IDS[k], 'фасадных вершин', facadeStats[MODEL_IDS[k]]); g.scene.userData.facade = true; }
       const low = lows[k].scene;
       if (!low.userData.prepared) {
         low.rotation.set(...cfg0.rotation); low.position.set(...cfg0.offset); low.updateMatrixWorld(true);
-        applyMaterialRules(low, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint });
+        applyMaterialRules(low, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint, facade: FACADE_TONES[MODEL_IDS[k]] });
         low.traverse((o) => { const m = o as Mesh; if (m.isMesh) { m.userData.noCollide = true; m.castShadow = false; m.receiveShadow = false; } });
+        if (imask) markFacade(low, imask);
         const mg = mergeByMaterial(low); console.info('[lod]', MODEL_IDS[k], 'упрощённая копия: мешей', mg[0], '→', mg[1]);
         low.userData.prepared = true;
       }
       const far = fars[k].scene;
       if (!far.userData.prepared) {
         far.rotation.set(...cfg0.rotation); far.position.set(...cfg0.offset); far.updateMatrixWorld(true);
-        applyMaterialRules(far, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint });
+        applyMaterialRules(far, tex, cfg0.terrainCuts ?? [], { paint: cfg0.paint, facade: FACADE_TONES[MODEL_IDS[k]] });
         far.traverse((o) => { const m = o as Mesh; if (m.isMesh) { m.userData.noCollide = true; m.castShadow = false; m.receiveShadow = false; } });
+        if (imask) markFacade(far, imask);
         const mg = mergeByMaterial(far); console.info('[lod]', MODEL_IDS[k], 'дальняя копия: мешей', mg[0], '→', mg[1]);
         far.userData.prepared = true;
       }
@@ -501,6 +509,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       for (let k = 0; k < MN * MN; k++) if (water[k] === 1) { dist[k] = 0; src[k] = k; q.push(k); }
       for (let qi = 0; qi < q.length; qi++) { const k = q[qi]; const i = k % MN, j = (k - i) / MN;
         for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ii = i + di, jj = j + dj; if (ii < 0 || jj < 0 || ii >= MN || jj >= MN) continue; const k2 = jj * MN + ii; if (dist[k2] >= 0) continue; dist[k2] = dist[k] + 1; src[k2] = src[k]; q.push(k2); } }
+      (window as unknown as { __facadeDebug: (v: number) => void }).__facadeDebug = (v) => { facadeDebug.value = v; };
+      setFacadeHouses(houses.map((hh) => { const v = new Vector3((hh.fp[0] + hh.fp[2]) / 2, 0, (hh.fp[1] + hh.fp[3]) / 2).applyMatrix4(hh.matrix); return { x: v.x, z: v.z, model: hh.model }; })); // оттенки фасадов: дома одного типа чередуются
       const hp = houses.map((hh) => ({ m: hh.matrix.clone().invert(), fp: hh.fp, off: hh.model === 'villa3' ? 18 : 10 })); // от виллы 3 вода дальше (пруд вокруг неё, замечание заказчика)
       const shopB = c.buildings.find((b) => b.model === 'shop');
       const dHouse = (x: number, z: number) => { let best = Infinity; const lp = new Vector3();
@@ -1002,7 +1012,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
     const builtNow = { siteSkirt, roads: roadsB.geom, windows: village.windows, trees, lamps, entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, arrive: entrance?.arrive ?? null, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
-    (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
+    (window as unknown as { __complex: unknown }).__complex = { facade: { ...facadeStats }, heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
   }, [data, instances, houses]);
 
   // коллайдер всего комплекса: дома (с проёмами дверей в системе координат каждого дома, без растений и штор),

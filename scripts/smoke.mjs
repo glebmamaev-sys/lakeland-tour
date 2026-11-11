@@ -29,7 +29,7 @@ const COLLECT = `(() => {
   const floors = {}; for (const k of Object.keys(F).sort()) floors[k] = +F[k].topo.toFixed(2);
   let renderer = ''; try { const gl = window.__gl.getContext(); const e = gl.getExtension('WEBGL_debug_renderer_info'); renderer = e ? gl.getParameter(e.UNMASKED_RENDERER_WEBGL) : ''; } catch {}
   return { buildings: c.data.buildings.map((b) => b.id + ':' + b.model), houses: c.houses.length, floors, rooms, path: c.pathCheck, pathLines: c.pathLines,
-    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer, dup, gate: c.gate ?? null, lamps: c.lamps ?? 0, village: c.village ?? 0, roadsKm: c.roadsKm ?? 0, trees: c.trees ?? 0, evening: typeof window.__setEvening === 'function', arrive: c.arrive ? [+c.arrive.x.toFixed(1), +c.arrive.z.toFixed(1)] : null, arriveLand: c.arrive ? c.heightAt(c.arrive.x, c.arrive.z) !== null : false,
+    flights: c.graded ? c.graded.flights : null, steps: c.graded ? c.graded.steps : null, walls: c.terraces ? c.terraces.walls.length : null, lotus: c.lotus, renderer, dup, gate: c.gate ?? null, lamps: c.lamps ?? 0, facade: c.facade ?? null, village: c.village ?? 0, roadsKm: c.roadsKm ?? 0, trees: c.trees ?? 0, evening: typeof window.__setEvening === 'function', arrive: c.arrive ? [+c.arrive.x.toFixed(1), +c.arrive.z.toFixed(1)] : null, arriveLand: c.arrive ? c.heightAt(c.arrive.x, c.arrive.z) !== null : false,
     perf: window.__gl ? { tris: window.__gl.info.render.triangles, calls: window.__gl.info.render.calls } : null };
 })()`;
 
@@ -99,7 +99,7 @@ async function main() {
     }
     const snapshot = data && { floors: data.floors, rooms: data.rooms, path: data.path, pathLines: data.pathLines, flights: data.flights, steps: data.steps, walls: data.walls,
       residents: walk ? { walkers: walk.walkers, sunbathers: walk.sunbathers, gardener: walk.gardener } : null,
-      lotus: data.lotus, gate: data.gate, arrive: data.arrive, lamps: data.lamps, village: data.village, roadsKm: data.roadsKm, trees: data.trees, entries, strips: Object.fromEntries(Object.entries(strips).sort()), pads };
+      lotus: data.lotus, gate: data.gate, arrive: data.arrive, lamps: data.lamps, village: data.village, roadsKm: data.roadsKm, trees: data.trees, facade: data.facade, entries, strips: Object.fromEntries(Object.entries(strips).sort()), pads };
     const baseline = existsSync(BASELINE) ? JSON.parse(await readFile(BASELINE, 'utf8')) : null;
 
     // жёсткие правила
@@ -119,6 +119,7 @@ async function main() {
       const pf = data.perf; check(`нагрузка кадра с дрона в бюджете (${pf ? (pf.tris / 1e6).toFixed(2) + ' млн треугольников, ' + pf.calls + ' вызовов' : 'нет данных'})`, !!pf && pf.tris <= 3.5e6 && pf.calls <= 700, 'бюджет: 3,5 млн треугольников и 700 вызовов отрисовки');
       check(`вечерний режим и светильники дорожек на месте (${data.lamps} шт.)`, data.evening && data.lamps >= 15, 'нет переключателя вечера или мало светильников');
       check(`окружение на месте (домов ${data.village}, дорог ${data.roadsKm} км, деревьев ${data.trees})`, data.village >= 100 && data.roadsKm >= 10 && data.trees >= 500, 'нет деревни, дорог или рощ за границей участка');
+      { const fc = data.facade ?? {}; const types = ['villa1', 'villa21', 'villa22', 'villa3']; check(`фасады размечены у всех типов вилл (${types.map((t) => fc[t] ?? 0).join(', ')} вершин)`, types.every((t) => (fc[t] ?? 0) >= 1000), 'у типа виллы нет наружных граней: отделка фасада не применится'); }
       check(`прогулка: игрок стоит на парковке, стенка его держит${walk ? ` (над землёй ${walk.stand} м, за стенку ${walk.wall} м)` : ''}`, !!walk && walk.tour && walk.stand !== null && walk.stand > -0.1 && walk.stand < 0.9 && (walk.wall === null || walk.wall < 0.3), walk ? 'игрок провалился, завис или перешёл стенку' : 'режим «Пешком» не включился');
       check(`жители на месте${walk ? ` (гуляют ${walk.walkers}, загорают ${walk.sunbathers}, стоят и сидят ${walk.standing}, садовник ${walk.gardener ? 'есть' : 'нет'})` : ''}`, !!walk && walk.walkers >= 6 && walk.sunbathers >= 3 && walk.gardener && walk.standing >= 5, 'нет гостей, загорающих или садовника');
       check('нет комнат-дублей (одна комната не обставлена дважды)', (data.dup ?? []).length === 0, (data.dup ?? []).join('\n      '));

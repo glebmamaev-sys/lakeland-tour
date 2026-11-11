@@ -5,7 +5,7 @@ import {
   Box3, BufferAttribute, BufferGeometry, Color, DoubleSide, Float32BufferAttribute, Material, Mesh,
   MeshPhysicalMaterial, MeshStandardMaterial, Object3D, RepeatWrapping, SRGBColorSpace, Texture, Vector2, Vector3,
 } from 'three';
-import { applyInteriorFinish, makeTileTexture } from './world/textures';
+import { applyInteriorFinish, makeTileTexture, type FacadeFinish } from './world/textures';
 import { onEve } from './world/DayTime';
 
 export type Role =
@@ -145,6 +145,8 @@ export type MaterialAssets = {
 export type MaterialOptions = {
   /** Цвет «краски» (RAL 7021 по умолчанию; у Виллы №3 это RAL 7005 серый) */
   paint?: string;
+  /** Отделка фасада (тон штукатурки по типу виллы, верхние этажи, цоколь); камень цоколя подставляется из текстур */
+  facade?: Omit<FacadeFinish, 'plinth'>;
 };
 /** Масштаб «коробочной» развёртки (м на один повтор текстуры) по ролям без UV. */
 const BOX_UV_SCALE: Partial<Record<Role, number>> = { ground: 4, terrain: 4, slats: 0.45, walnut: 1.5, stucco: 1.2, wallstone: 1.0, mosaic: 0.6 };
@@ -471,8 +473,12 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
       return new MeshStandardMaterial({ map: assets.slats, normalMap: assets.slatsN, normalScale: new Vector2(0.9, 0.9), roughness: 0.75, metalness: 0, side: DoubleSide });
     case 'walnut':
       return new MeshStandardMaterial({ map: assets.walnut, color: new Color('#d9c6b0'), roughness: 0.7, metalness: 0, side: DoubleSide });
-    case 'stucco':
-      return new MeshStandardMaterial({ map: assets.stucco, normalMap: assets.stuccoN, normalScale: new Vector2(0.6, 0.6), color: new Color('#ebe6dc'), roughness: 0.95, metalness: 0, side: DoubleSide });
+    case 'stucco': {
+      // наружные стены вилл 2.x и 3 — этот материал: фасадная отделка только по метке aFac (Facade.ts), остальное как было
+      const m = new MeshStandardMaterial({ map: assets.stucco, normalMap: assets.stuccoN, normalScale: new Vector2(0.6, 0.6), color: new Color('#ebe6dc'), roughness: 0.95, metalness: 0, side: DoubleSide });
+      if (options.facade) applyInteriorFinish(m, tileTexture(), assets.stucco, undefined, undefined, { ...options.facade, plinth: assets.wallstone }, true);
+      return m;
+    }
     case 'wallstone':
       return new MeshStandardMaterial({ map: assets.wallstone, roughness: 0.95, metalness: 0, side: DoubleSide });
     case 'mosaic':
@@ -512,14 +518,14 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
       const m = src.clone();
       m.roughness = 0.95; m.metalness = 0; m.side = DoubleSide;
       m.polygonOffset = true; m.polygonOffsetFactor = -4; m.polygonOffsetUnits = -4;
-      if (!m.map) applyInteriorFinish(m, tileTexture(), assets.stucco, 1 / 3.0);
+      if (!m.map) applyInteriorFinish(m, tileTexture(), assets.stucco, 1 / 3.0, undefined, options.facade && { ...options.facade, plinth: assets.wallstone }); // торцы плит и стенки лестниц вилл 1.x — тоже фасад
       return m;
     }
     case 'ceiling':
       // потолки освещены только снизу (небо их не видит) — чуть подсвечиваем, иначе серые
       // в вилле 3 в этот же меш («…_inside») попали и полы комнат: без отделки они были чисто белыми. Та же отделка,
       // что у роли default: верхние грани — плитка известняка, стены — рельеф штукатурки, низ (потолок) — гладкий
-      { const m = new MeshStandardMaterial({ color: new Color('#e9e4da'), emissive: new Color('#262522'), roughness: 0.95, metalness: 0, side: DoubleSide }); applyInteriorFinish(m, tileTexture(), assets.stucco); return m; }
+      { const m = new MeshStandardMaterial({ color: new Color('#e9e4da'), emissive: new Color('#262522'), roughness: 0.95, metalness: 0, side: DoubleSide }); applyInteriorFinish(m, tileTexture(), assets.stucco, undefined, undefined, options.facade && { ...options.facade, plinth: assets.wallstone }); return m; }
     case 'textured': {
       const m = src.clone();
       m.roughness = 0.9; m.metalness = 0; m.side = DoubleSide;
@@ -542,7 +548,7 @@ function buildMaterial(role: Role, src: MeshStandardMaterial, assets: MaterialAs
       const lum = 0.3 * m.color.r + 0.59 * m.color.g + 0.11 * m.color.b;
       if (lum < 0.08) m.color.setScalar(0.18);
       // отделка: полы — плитка известняка, стены — рельеф штукатурки (трипланарно, тёмные детали не трогаем)
-      if (!m.map) applyInteriorFinish(m, tileTexture(), assets.stucco);
+      if (!m.map) applyInteriorFinish(m, tileTexture(), assets.stucco, undefined, undefined, options.facade && { ...options.facade, plinth: assets.wallstone });
       return m;
     }
   }

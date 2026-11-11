@@ -7,7 +7,7 @@
 import type { Box3 } from 'three';
 import type { Plan } from '../plan';
 
-export type IndoorMask = { data: Uint8Array; floor: Float32Array; green: Uint8Array; greenFloor: Float32Array; x0: number; z0: number; step: number; nx: number; nz: number }; // green: посадки внутри пятна — газон на отметке своего уровня
+export type IndoorMask = { levels: { level: number; data: Uint8Array }[]; data: Uint8Array; floor: Float32Array; green: Uint8Array; greenFloor: Float32Array; x0: number; z0: number; step: number; nx: number; nz: number }; // green: посадки внутри пятна — газон на отметке своего уровня
 const STEP = 0.1, GROW = 0.5;
 
 export function buildIndoor(plan: Plan, glass: Box3[], greenRects: { rect: { x0: number; z0: number; x1: number; z1: number }; level: number }[] = []): IndoorMask {
@@ -15,6 +15,7 @@ export function buildIndoor(plan: Plan, glass: Box3[], greenRects: { rect: { x0:
   const nx = Math.ceil((bx1 + 1.5 - x0) / STEP) + 1, nz = Math.ceil((bz1 + 1.5 - z0) / STEP) + 1; const N = nx * nz;
   const data = new Uint8Array(N), floor = new Float32Array(N).fill(Infinity), green = new Uint8Array(N), greenFloor = new Float32Array(N).fill(Infinity);
   const g = Math.round(GROW / STEP);
+  const levels: { level: number; data: Uint8Array }[] = []; // маска каждого уровня отдельно — для отделки фасадов (стена второго этажа над комнатой первого — наружная)
   const dilate = (src: Uint8Array) => { const out = new Uint8Array(N); for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { if (!src[j * nx + i]) continue; for (let dj = -g; dj <= g; dj++) for (let di = -g; di <= g; di++) { if (di * di + dj * dj > g * g) continue; const ii = i + di, jj = j + dj; if (ii >= 0 && jj >= 0 && ii < nx && jj < nz) out[jj * nx + ii] = 1; } } return out; };
   const erode = (src: Uint8Array) => { const inv = new Uint8Array(N); for (let k = 0; k < N; k++) inv[k] = src[k] ? 0 : 1; const d = dilate(inv); const out = new Uint8Array(N); for (let k = 0; k < N; k++) out[k] = d[k] ? 0 : 1; return out; };
   for (const l of plan.levels) {
@@ -38,8 +39,10 @@ export function buildIndoor(plan: Plan, glass: Box3[], greenRects: { rect: { x0:
     // зелёные зоны внутри пятна — не интерьер (газон на отметке пола); контур — заливкой по плану, как у комнат
     for (const gz of greenRects) { if (gz.level !== l.level) continue; const rr = gz.rect; const i0 = Math.max(0, Math.floor((rr.x0 - x0) / STEP)), i1 = Math.min(nx - 1, Math.ceil((rr.x1 - x0) / STEP)), j0 = Math.max(0, Math.floor((rr.z0 - z0) / STEP)), j1 = Math.min(nz - 1, Math.ceil((rr.z1 - z0) / STEP)); for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { lvl[j * nx + i] = 0; green[j * nx + i] = 1; greenFloor[j * nx + i] = Math.min(greenFloor[j * nx + i], l.level); } }
     for (let k = 0; k < N; k++) if (lvl[k]) { data[k] = 1; floor[k] = Math.min(floor[k], l.level); }
+    levels.push({ level: l.level, data: lvl });
   }
-  return { data, floor, green, greenFloor, x0, z0, step: STEP, nx, nz };
+  levels.sort((p, q) => p.level - q.level);
+  return { levels, data, floor, green, greenFloor, x0, z0, step: STEP, nx, nz };
 }
 
 /** Значение маски и пол в точке (локальные координаты плана); вне сетки — снаружи. */
