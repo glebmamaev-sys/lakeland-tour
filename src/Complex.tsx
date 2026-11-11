@@ -102,6 +102,8 @@ const placeTree = (p: Plant) => ({ x: p.x, y: p.y + 0.05, z: p.z, yaw: p.r * 6.2
 // участка, северный — от северной границы у виллы 2.4. Ломаные сглаживаются; земля за ними остаётся сухой
 const SHORE_GUIDE_W: [number, number][] = [[-66.5, 54], [-90, 60], [-120, 76], [-150, 102], [-172, 132], [-176, 150]];
 const SHORE_GUIDE_N: [number, number][] = [[14, -170], [9, -150], [-2, -130], [-13, -110], [-20, -90], [-20, -72], [-16, -58], [-12, -46]];
+const GRASS_NOISE = 0.003; // 1/м: масштаб пятен яркости травы, общий для участка, фартука и окрестностей (раньше у окрестностей пятна были в 6 раз крупнее и не совпадали с участком — на стыке менялся тон)
+const APRON = 4; // м: на столько фартук края сетки участка уходит наружу, под сетку окрестностей
 const SHORE_SLOPE = 0.35; // уклон берега окрестностей, м на метр от уреза
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
 type BuiltScene = { siteSkirt: BufferGeometry | null; roads: BufferGeometry | null; windows: BufferGeometry | null; trees: Plant[]; lamps: Lamps | null; entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; arrive: { x: number; z: number; yaw: number } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
@@ -922,7 +924,13 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const cc = new Color();
     // за оградой — дикая трава окрестностей (тот же тон, что у дальней сетки), стриженый газон кончается по границе
     // участка: раньше светлый газон выходил за ограду до края сетки, и стык с тёмной травой шёл по прямоугольнику
-    const wild = new Color('#5f8a46'); const Bs = c.site.boundary;
+    // Тон берётся так же, как у сетки окрестностей: лес или открытая земля по карте покрова, с той же линейной
+    // интерполяцией по треугольникам сетки 10 м. Раньше за оградой всегда был тон леса, и на открытой земле (север
+    // участка) полоса сетки участка выделялась тёмным прямоугольником
+    const wild = new Color('#5f8a46'), wildOpen = new Color('#a9b77a'), wildC = new Color(); const Bs = c.site.boundary;
+    const openAt = (x: number, z: number) => { const fx = (x + c.dem.half) / 10, fz = (z + c.dem.half) / 10; const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j;
+      const o = (ii: number, jj: number) => (coverAt(-c.dem.half + ii * 10, -c.dem.half + jj * 10) === 2 ? 1 : 0); const a = o(i, j), b = o(i + 1, j), cc2 = o(i, j + 1), d = o(i + 1, j + 1);
+      return u + v <= 1 ? a + (b - a) * u + (cc2 - a) * v : d + (cc2 - d) * (1 - u) + (b - d) * (1 - v); };
     const outDist = (x: number, z: number) => { let best = Infinity; for (let i = 0, j = Bs.length - 1; i < Bs.length; j = i++) { const [ax, az] = Bs[j], [bx, bz] = Bs[i]; const dx = bx - ax, dz = bz - az; const L2 = dx * dx + dz * dz; const t = L2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)) : 0; const px = ax + t * dx - x, pz = az + t * dz - z; const d2 = px * px + pz * pz; if (d2 < best) best = d2; } return Math.sqrt(best); };
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
       const k = j * nx + i, x = x0 + i * step, z = z0 + j * step, y = h[k];
@@ -932,7 +940,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       if (y >= W + 0.6) {
         const dp = distToPaths(net, x, z); if (dp < 1.6) cc.lerp(worn, (1 - dp / 1.6) * 0.65);
         const nse = Math.sin(x * 0.11 + 1.3) * Math.sin(z * 0.14 + 0.7) + Math.sin(x * 0.031) * Math.sin(z * 0.027); if (nse > 0.9) cc.lerp(dry, Math.min(1, (nse - 0.9) * 2) * 0.5);
-        if (!inPoly(x, z, Bs)) cc.lerp(wild, Math.min(1, outDist(x, z) / 1.0));
+        if (!inPoly(x, z, Bs)) cc.lerp(wildC.copy(wild).lerp(wildOpen, openAt(x, z)), Math.min(1, outDist(x, z) / 1.0));
       }
       scol.set([cc.r, cc.g, cc.b], k * 3);
     }
@@ -944,17 +952,6 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     }
     const sg = new BufferGeometry(); sg.setAttribute('position', new BufferAttribute(sp, 3)); sg.setAttribute('uv', new BufferAttribute(su, 2));
     sg.setAttribute('color', new BufferAttribute(scol, 3)); sg.setIndex(sidx); sg.computeVertexNormals();
-    // юбка по краю сетки участка: окрестности под краем лежат на 0,3–0,5 м ниже (см. ringY), без юбки край газона висел бы
-    // в воздухе. Полоса вниз на 1,5 м тем же материалом, под водой не нужна
-    let siteSkirt: BufferGeometry | null = null;
-    { const P: number[] = [], U: number[] = [], Cc: number[] = []; const ring: number[] = [];
-      for (let i = 0; i < nx; i++) ring.push(i); for (let j = 1; j < nz; j++) ring.push(j * nx + nx - 1); for (let i = nx - 2; i >= 0; i--) ring.push((nz - 1) * nx + i); for (let j = nz - 2; j >= 0; j--) ring.push(j * nx);
-      for (let q = 0; q < ring.length - 1; q++) { const a = ring[q], b = ring[q + 1]; if (sp[a * 3 + 1] < W - 0.3 && sp[b * 3 + 1] < W - 0.3) continue;
-        const va = [sp[a * 3], sp[a * 3 + 1], sp[a * 3 + 2]], vb = [sp[b * 3], sp[b * 3 + 1], sp[b * 3 + 2]];
-        P.push(va[0], va[1], va[2], vb[0], vb[1], vb[2], vb[0], vb[1] - 1.5, vb[2], va[0], va[1], va[2], vb[0], vb[1] - 1.5, vb[2], va[0], va[1] - 1.5, va[2]);
-        U.push(su[a * 2], su[a * 2 + 1], su[b * 2], su[b * 2 + 1], su[b * 2], su[b * 2 + 1] + 0.4, su[a * 2], su[a * 2 + 1], su[b * 2], su[b * 2 + 1] + 0.4, su[a * 2], su[a * 2 + 1] + 0.4);
-        for (const v of [a, b, b, a, b, a]) Cc.push(scol[v * 3], scol[v * 3 + 1], scol[v * 3 + 2]); }
-      if (P.length) { siteSkirt = new BufferGeometry(); siteSkirt.setAttribute('position', new Float32BufferAttribute(P, 3)); siteSkirt.setAttribute('uv', new Float32BufferAttribute(U, 2)); siteSkirt.setAttribute('color', new Float32BufferAttribute(Cc, 3)); siteSkirt.computeVertexNormals(); } }
     // окрестности: сетка 20 м в квадрате ±2 км; вода — ниже уровня; внутри участка — под ним
     const LN = c.dem.land_n;
     const demAt = demSampler({ ...c, dem: { ...c.dem, n: LN, step: (2 * c.dem.half) / (LN - 1) } }, land), siteAt = siteSampler(c, h);
@@ -1004,6 +1001,23 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const ya = dp[(j * N + i) * 3 + 1], yb = dp[(j * N + i + 1) * 3 + 1], yc = dp[((j + 1) * N + i) * 3 + 1], yd = dp[((j + 1) * N + i + 1) * 3 + 1];
       return u + v <= 1 ? ya + (yb - ya) * u + (yc - ya) * v : yd + (yc - yd) * (1 - u) + (yb - yd) * (1 - v); };
     const hOut = (x: number, z: number) => { const s = heightAt(x, z); if (s === null) return null; return inPoly(x, z, c.site.boundary) || inGrid(x, z, 0) ? s : Math.max(s, drawnAt(x, z)); };
+    // фартук по краю сетки участка: окрестности у края лежат ниже (см. ringY), без него край газона висел бы в воздухе.
+    // Раньше это была вертикальная полоса вниз на 1,5 м, и край участка стоял над окрестностями стенкой. Теперь полоса
+    // уходит наружу на 4 м и ложится под нарисованную сетку окрестностей: вместо стенки травяной откос. Под водой не нужна
+    let siteSkirt: BufferGeometry | null = null;
+    { const P: number[] = [], U: number[] = [], Cc: number[] = []; const ring: number[] = [];
+      for (let i = 0; i < nx; i++) ring.push(i); for (let j = 1; j < nz; j++) ring.push(j * nx + nx - 1); for (let i = nx - 2; i >= 0; i--) ring.push((nz - 1) * nx + i); for (let j = nz - 2; j >= 0; j--) ring.push(j * nx);
+      for (let q = 0; q < ring.length - 1; q++) { const a = ring[q], b = ring[q + 1]; if (sp[a * 3 + 1] < W - 0.3 && sp[b * 3 + 1] < W - 0.3) continue;
+        const va = [sp[a * 3], sp[a * 3 + 1], sp[a * 3 + 2]], vb = [sp[b * 3], sp[b * 3 + 1], sp[b * 3 + 2]];
+        const out = (k: number, v: number[]) => { const i = k % nx, j = (k - i) / nx; const x = v[0] + (i === 0 ? -APRON : i === nx - 1 ? APRON : 0), z = v[2] + (j === 0 ? -APRON : j === nz - 1 ? APRON : 0); return [x, drawnAt(x, z) - 0.15, z]; };
+        const wa = out(a, va), wb = out(b, vb);
+        P.push(va[0], va[1], va[2], vb[0], vb[1], vb[2], wb[0], wb[1], wb[2], va[0], va[1], va[2], wb[0], wb[1], wb[2], wa[0], wa[1], wa[2]);
+        U.push(su[a * 2], su[a * 2 + 1], su[b * 2], su[b * 2 + 1], wb[0] / 4, wb[2] / 4, su[a * 2], su[a * 2 + 1], wb[0] / 4, wb[2] / 4, wa[0] / 4, wa[2] / 4);
+        // низ фартука — в тон сетки окрестностей в этой точке (покров земли, песок у воды), верх — цвет края участка
+        const oc = (w: number[]) => { const cl = shore.clone().lerp(wildC.copy(wild).lerp(wildOpen, openAt(w[0], w[2])), Math.max(0, Math.min(1, (w[1] + 0.15 - (W + 0.5)) / 1.5))); return [cl.r, cl.g, cl.b]; };
+        const ca = [scol[a * 3], scol[a * 3 + 1], scol[a * 3 + 2]], cb = [scol[b * 3], scol[b * 3 + 1], scol[b * 3 + 2]], cwa = oc(wa), cwb = oc(wb);
+        Cc.push(...ca, ...cb, ...cwb, ...ca, ...cwb, ...cwa); }
+      if (P.length) { siteSkirt = new BufferGeometry(); siteSkirt.setAttribute('position', new Float32BufferAttribute(P, 3)); siteSkirt.setAttribute('uv', new Float32BufferAttribute(U, 2)); siteSkirt.setAttribute('color', new Float32BufferAttribute(Cc, 3)); siteSkirt.computeVertexNormals(); } }
     const entrance = gate ? buildEntrance(gate, c.site.boundary, hOut, isLand, c.osm.roads) : null;
     // окружение (Surroundings.ts): дороги карты лентами по рельефу и деревня — дома с двускатными крышами по контурам OSM
     const roadsB = buildRoads(c.osm.roads, hOut, (x, z) => inPoly(x, z, c.site.boundary));
@@ -1176,8 +1190,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         .replace('#include <common>', '#include <common>\nuniform sampler2D uNoise; uniform float uNoiseScale; uniform float uTime, uLevel; varying vec3 vWp; uniform sampler2D uIndoor; uniform vec2 uI0, uISize; uniform float uHasIndoor;')
         .replace('#include <map_fragment>', `#include <map_fragment>
           ${caustics ? 'if (uHasIndoor > 0.5) { vec2 iuv = (vWp.xz - uI0) / uISize; if (iuv.x > 0.0 && iuv.x < 1.0 && iuv.y > 0.0 && iuv.y < 1.0 && texture2D(uIndoor, iuv).r > 0.5) discard; }' : ''}
-          float nz = texture2D(uNoise, vMapUv * uNoiseScale).r;
-          float nz2 = texture2D(uNoise, vMapUv * uNoiseScale * 7.3 + 0.37).r;
+          float nz = texture2D(uNoise, vWp.xz * uNoiseScale).r; // шум по мировым координатам: у участка и окрестностей одно поле, на стыке тон не скачет
+          float nz2 = texture2D(uNoise, vWp.xz * uNoiseScale * 7.3 + 0.37).r;
           diffuseColor.rgb *= mix(0.78, 1.16, nz) * mix(0.9, 1.08, nz2);
           diffuseColor.g *= 1.0 + (nz - 0.5) * 0.12;
           ${caustics ? `
@@ -1195,9 +1209,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     return m;
   };
   const siteMat = useMemo(() => { const t = grass.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.needsUpdate = true;
-    return grassVary(new MeshStandardMaterial({ map: t, vertexColors: true, roughness: 1 }), 0.012, true); }, [grass, data]);
-  const siteSkirtMat = useMemo(() => { const m = siteMat.clone(); m.side = DoubleSide; return m; }, [siteMat]);
-  const demMat = useMemo(() => grassVary(new MeshStandardMaterial({ map: siteMat.map, vertexColors: true, roughness: 1 }), 0.006), [siteMat]);
+    return grassVary(new MeshStandardMaterial({ map: t, vertexColors: true, roughness: 1 }), GRASS_NOISE, true); }, [grass, data]);
+  const siteSkirtMat = useMemo(() => grassVary(new MeshStandardMaterial({ map: siteMat.map, vertexColors: true, roughness: 1, side: DoubleSide }), GRASS_NOISE), [siteMat]);
+  const demMat = useMemo(() => grassVary(new MeshStandardMaterial({ map: siteMat.map, vertexColors: true, roughness: 1 }), GRASS_NOISE), [siteMat]);
   // окружение: дома деревни (цвет стен и крыш по вершинам), их окна (вечером светятся), асфальт дорог
   const villageMat = useMemo(() => new MeshStandardMaterial({ vertexColors: true, roughness: 0.92, side: DoubleSide }), []);
   const windowMat = useMemo(() => { const m = new MeshStandardMaterial({ color: '#39424a', roughness: 0.3, emissive: '#ffc777', emissiveIntensity: 0, side: DoubleSide }); onEve((k) => { m.emissiveIntensity = 2.6 * k; }); return m; }, []);
