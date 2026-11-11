@@ -654,7 +654,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const col = buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => m.userData.role === 'water' || m.userData.role === 'ground' || m.userData.role === 'terrain' || m.userData.role === 'glass' || m.userData.role === 'plants'));
       if (!col) continue;
       const planL = data.plans[hi.model]; const minLevel = planL ? Math.min(...planL.levels.map((l) => l.level)) : 0;
-      let found = 0; const cp = col.geometry.getAttribute('position') as BufferAttribute; const e1 = new Vector3(), e2 = new Vector3(), nrm = new Vector3(), v0 = new Vector3();
+      let found = 0, eaves = 0; const mine: number[] = []; const OVERHANG = 3.0; const cp = col.geometry.getAttribute('position') as BufferAttribute; const e1 = new Vector3(), e2 = new Vector3(), nrm = new Vector3(), v0 = new Vector3();
       // нормаль треугольника по индексу грани (геометрия коллайдера неиндексированная, мировые координаты)
       const upFacing = (ht: Intersection) => {
         if (ht.face && ht.face.normal) return ht.face.normal.y > 0.5;
@@ -673,9 +673,20 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         if (!hits.length) continue;
         let low = Infinity; for (const ht of hits) if (upFacing(ht)) low = Math.min(low, 80 - ht.distance);
         low = Math.max(low, inst.position.y + minLevel - 0.3); // ниже нижнего пола дома поверхностей, по которым ходят, нет
-        const k = j * nx + i; footMask[k] = 1; if (Number.isFinite(low)) { slabTop[k] = low; found++; }
+        // свес без пола под ним (карниз кровли, козырёк, навес): нижняя «плита» выше земли площадки больше чем на этаж —
+        // это не пол. Раньше от неё до земли тянулась стенка цоколя: белые «пилоны» 8 м у вилл 2.2–2.5, 4–9 м у 1.x
+        const k = j * nx + i; if (Number.isFinite(low) && low - h[k] > OVERHANG) { eaves++; continue; }
+        footMask[k] = 1; if (Number.isFinite(low)) { slabTop[k] = low; found++; mine.push(k); }
       }
-      console.info('[floors]', hi.id, 'плит/полов под пятном:', found, 'клеток');
+      // зонты, навесы у бассейна, козырьки: небольшой (< 20 м²) островок «плиты» выше земли больше чем на 1,2 м — не пол.
+      // Раньше такие островки обносились цоколем: белые «цилиндры» под зонтами виллы 3, столбы под навесами вилл 1.x
+      { const seen = new Uint8Array(nx * nz); const mineSet = new Uint8Array(nx * nz); for (const k of mine) mineSet[k] = 1;
+        for (const k0 of mine) { if (seen[k0]) continue; const comp = [k0]; seen[k0] = 1;
+          for (let qi = 0; qi < comp.length; qi++) { const k = comp[qi]; for (const n of [k - 1, k + 1, k - nx, k + nx]) if (n >= 0 && n < nx * nz && mineSet[n] && !seen[n] && Math.abs(slabTop[n] - slabTop[k]) <= 0.6) { seen[n] = 1; comp.push(n); } }
+          if (comp.length * step * step >= 20) continue;
+          const lift = comp.map((k) => slabTop[k] - h[k]).sort((p, q) => p - q)[comp.length >> 1];
+          if (lift > 1.2) { for (const k of comp) { footMask[k] = 0; slabTop[k] = NaN; } eaves += comp.length; found -= comp.length; } } }
+      console.info('[floors]', hi.id, 'плит/полов под пятном:', found, 'клеток; свесов без пола:', eaves);
       col.geometry.dispose();
     }
     // интерьер по планам: мировая маска 0,1 м (стены + комнаты до наружной грани); в глубине ≥ 0,5 м от грани
@@ -744,6 +755,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     for (const line of net.lines) { if (line.length < 2) continue; const cv = new CatmullRomCurve3(line, false, 'catmullrom', 0.3); const np = Math.max(2, Math.ceil(cv.getLength() / 0.5));
       for (const q of cv.getSpacedPoints(np)) { pathCheck.pts++; if (indoorW(q.x, q.z) !== null) pathCheck.inHouse++; if (pools.some((b) => q.x > b.min.x && q.x < b.max.x && q.z > b.min.z && q.z < b.max.z)) pathCheck.inPool++; } }
     let terr: Terraces | null = null; let graded: Graded | null = null; let skirtGeom: BufferGeometry | null = null;
+    let seatStats: Record<string, [number, number]> | null = null; // посадка по домам: [земля выше плиты, плита выше земли] — максимумы по границе пятна, м
     // под магазином земля не выше его пола: пол ставится по отметке у двери (+0,12), цоколь 1,8 м прячет перепад;
     // пятно магазина опускается на 0,5 м ниже отметки у двери и фиксируется, пятачок у двери фиксируется как есть
     if (pose && gradeFixed) {
@@ -827,19 +839,26 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         } }
       // грани по границе пятна дома: где плита (терраса, крыльцо) выше земли снаружи — цоколь; где земля снаружи выше
       // плиты (заглублённые террасы виллы 3) — подпорная грань. Между клеткой пятна с плитой и соседней уличной клеткой
-      { const P: number[] = [], U: number[] = [];
+      { const P: number[] = [], U: number[] = []; const seatDbg: number[] = []; (window as unknown as { __seat: number[] }).__seat = seatDbg; // посадка: (x, z, верх плиты, земля снаружи) по границе пятен домов — замеры и smoke
         const quad = (ax: number, az: number, bx: number, bz: number, y0: number, y1: number) => { P.push(ax, y0, az, bx, y0, bz, bx, y1, bz, ax, y0, az, bx, y1, bz, ax, y1, az); const L = Math.hypot(bx - ax, bz - az); U.push(0, y0, L, y0, L, y1, 0, y0, L, y1, 0, y1); };
         for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
           const k = j * nx + i; if (!footMask[k] || Number.isNaN(slabTop[k])) continue; const x = x0 + i * step, z = z0 + j * step;
           for (const [n, dx, dz] of [[k + 1, 1, 0], [k - 1, -1, 0], [k + nx, 0, 1], [k - nx, 0, -1]] as [number, number, number][]) {
             if (hiddenW(x0 + (n % nx) * step, z0 + Math.floor(n / nx) * step)) continue; // сосед тоже под домом
-            const top = slabTop[k], ground = h[n]; if (Math.abs(top - ground) < 0.12) continue;
+            const top = slabTop[k], ground = h[n]; seatDbg.push(+x.toFixed(2), +z.toFixed(2), +top.toFixed(2), +ground.toFixed(2)); if (Math.abs(top - ground) < 0.12) continue;
             const y0 = Math.min(top, ground) - 0.3, y1 = Math.max(top, ground) + 0.05;
             const mx = x + dx * step / 2, mz = z + dz * step / 2;
             if (dx) quad(mx, mz - step / 2, mx, mz + step / 2, y0, y1); else quad(mx - step / 2, mz, mx + step / 2, mz, y0, y1);
           }
         }
         if (P.length) { const g = new BufferGeometry(); g.setAttribute('position', new Float32BufferAttribute(P, 3)); g.setAttribute('uv', new Float32BufferAttribute(U, 2)); g.computeVertexNormals(); skirtGeom = g; }
+        // посадка по домам (smoke): каждая проба границы относится к ближайшему пятну дома (до 3 м)
+        { const inv = houses.map((hh) => ({ id: hh.id, m: hh.matrix.clone().invert(), fp: hh.fp })); const pv = new Vector3(); const st: Record<string, [number, number]> = {};
+          for (let q = 0; q < seatDbg.length; q += 4) { let best: string | null = null, bd = 3;
+            for (const hh of inv) { pv.set(seatDbg[q], 0, seatDbg[q + 1]).applyMatrix4(hh.m); const d = Math.hypot(Math.max(hh.fp[0] - pv.x, 0, pv.x - hh.fp[2]), Math.max(hh.fp[1] - pv.z, 0, pv.z - hh.fp[3])); if (d < bd) { bd = d; best = hh.id; } }
+            if (!best) continue; const v = seatDbg[q + 2] - seatDbg[q + 3]; const e = st[best] ??= [0, 0]; if (-v > e[0]) e[0] = -v; if (v > e[1]) e[1] = v; }
+          for (const k of Object.keys(st)) st[k] = [+st[k][0].toFixed(1), +st[k][1].toFixed(1)];
+          seatStats = st; console.info('[seat]', 'земля выше плиты / плита выше земли, макс. по границе пятна:', Object.entries(st).map(([id, e]) => `${id}: ${e[0]} / ${e[1]}`).join('; ')); }
       }
     }
     // меш участка; цвет вершин: газон, песок у воды, влажная тёмная полоса над водой, вытоптанная земля у дорожек,
@@ -1017,7 +1036,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
     const builtNow = { siteSkirt, roads: roadsB.geom, windows: village.windows, trees, lamps, entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, arrive: entrance?.arrive ?? null, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
-    (window as unknown as { __complex: unknown }).__complex = { facade: { ...facadeStats }, heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
+    (window as unknown as { __complex: unknown }).__complex = { seat: seatStats, facade: { ...facadeStats }, heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
   }, [data, instances, houses]);
 
   // коллайдер всего комплекса: дома (с проёмами дверей в системе координат каждого дома, без растений и штор),
