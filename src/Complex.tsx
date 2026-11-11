@@ -107,6 +107,14 @@ const WALK_LOOK_XZ: [number, number] = [-10, 0];
 type Placement = { id: string; model: string; floor: number; rot: number; pos: [number, number]; size?: [number, number]; moved?: boolean };
 /** По указанию заказчика магазин отодвинут целиком на 15 м от ближайшей виллы в сторону границы участка
  *  (вдоль направления «от виллы», но не ближе 6 м к границе). Идемпотентно: флаг moved. */
+/** Ряд вилл 1.x сдвинут на 3 м к востоку относительно генплана (решение заказчика 11.11.2026): плиты нижней террасы
+ *  виллы 1.1 выходили за границу участка на 1,1 м, а сдвинуть её одну нельзя — до 1.2 остаётся 0,4 м. После сдвига
+ *  плиты 1.1 в 1,9 м внутри границы, от 1.5 до плит виллы 3 — 7,6 м. Дорожки, берег и посадки пересчитываются сами. */
+const ROW1_SHIFT = 3;
+function shiftRow1(c: ComplexData) {
+  for (const b of c.buildings) { const bb = b as Placement & { shifted?: boolean; footprint_center?: [number, number] }; if (!/^1\./.test(b.id) || bb.shifted) continue;
+    b.pos = [b.pos[0] + ROW1_SHIFT, b.pos[1]]; if (bb.footprint_center) bb.footprint_center = [bb.footprint_center[0] + ROW1_SHIFT, bb.footprint_center[1]]; bb.shifted = true; }
+}
 function moveShop(shop: Placement, houses: HouseInfo[], B: [number, number][]) {
   if (shop.moved) return;
   const near = houses.map((hh) => new Vector3().setFromMatrixPosition(hh.matrix)).sort((a, b) => Math.hypot(a.x - shop.pos[0], a.z - shop.pos[1]) - Math.hypot(b.x - shop.pos[0], b.z - shop.pos[1]))[0];
@@ -164,7 +172,7 @@ function useComplexData() {
       fetch(asset('complex/land_h.bin')).then((r) => r.arrayBuffer()),
       fetch(asset('complex/landcover.bin')).then((r) => (r.ok && !(r.headers.get('content-type') || '').includes('text/html') ? r.arrayBuffer() : null)).catch(() => null),
       Promise.all(MODEL_IDS.map((id) => loadPlan(id))),
-    ]).then(([c, s, dm, wm, lh, lc, plans]) => { setStage('data:' + (alive ? 'set' : 'stale')); if (alive) setD({ c, site: new Float32Array(s), dem: new Float32Array(dm), water: new Uint8Array(wm), land: new Float32Array(lh), cover: lc ? new Uint8Array(lc) : null, plans: Object.fromEntries(MODEL_IDS.map((id, k) => [id, plans[k]])) }); }).catch((e) => { setStage('data:error ' + e); });
+    ]).then(([c, s, dm, wm, lh, lc, plans]) => { shiftRow1(c); setStage('data:' + (alive ? 'set' : 'stale')); if (alive) setD({ c, site: new Float32Array(s), dem: new Float32Array(dm), water: new Uint8Array(wm), land: new Float32Array(lh), cover: lc ? new Uint8Array(lc) : null, plans: Object.fromEntries(MODEL_IDS.map((id, k) => [id, plans[k]])) }); }).catch((e) => { setStage('data:error ' + e); });
     return () => { alive = false; };
   }, []);
   return d;
