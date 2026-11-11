@@ -104,6 +104,11 @@
   "flights": 7,
   "steps": 63,
   "walls": 7,
+  "residents": {
+    "walkers": 8,
+    "sunbathers": 6,
+    "gardener": true
+  },
   "lotus": 2853,
   "gate": [
     -56.8,

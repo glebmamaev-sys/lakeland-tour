@@ -266,13 +266,13 @@ function buildGraph(net: PathNet): Graph {
 }
 
 type HouseLite = { fp: [number, number, number, number]; matrix: Matrix4 };
-type Walker = { h: Human; edge: number; from: number; t: number; speed: number; yaw: number; pause: number; greet: number; cool: number; leader?: number; side: number };
-type Sunbather = { h: Human; lounger: Mesh; x: number; y: number; z: number; yaw: number };
+type Walker = { h: Human; edge: number; from: number; t: number; speed: number; yaw: number; pause: number; greet: number; cool: number; leader?: number; side: number; f: number; blocked: number; dodge: number; dodgeT: number }; // f — доля скорости (0 — стоит), blocked — сколько секунд стоит перед препятствием, dodge — добавка к боковому смещению
+type Sunbather = { h: Human; lounger: Mesh | null; x: number; y: number; z: number; yaw: number }; // lounger null — лежит на шезлонге террасы (мебель виллы)
 type Waterer = { h: Human; can: Mesh; spots: Vector3[]; i: number; x: number; z: number; yaw: number; watering: number; greet: number; cool: number };
 type Idler = { h: Human; x: number; y: number; z: number; yaw: number; cur: number; greet: number; cool: number; role: GreetRole; anim: 'idle' | 'idle2' | 'interact' | 'sit' };
 /** Стоящий/сидящий персонаж: где, куда смотрит, какой клип, кто по роли (приветствие), какая модель. */
 export type IdlerSpec = { x: number; y: number; z: number; yaw: number; char?: CharId; role?: GreetRole; anim?: Idler['anim'] };
-export type TerraceSpotW = { x: number; y: number; z: number; yaw: number; kind: 'rail' | 'sit'; house: string };
+export type TerraceSpotW = { x: number; y: number; z: number; yaw: number; kind: 'rail' | 'sit' | 'lie'; house: string };
 // поза «сидит»: клип Idle, после шага микшера бёдра направлены вперёд (чуть вниз), голени вертикально вниз, стопы
 // (отдельные кости под Root в риге Quaternius) переставлены к концу голени; корень опущен так, чтобы тазобедренный
 // сустав оказался на 0,66 м над сиденьем (стоя он на 0,932·масштаб)
@@ -313,21 +313,23 @@ function distToHouses(houses: HouseLite[], x: number, z: number): number {
   return best;
 }
 
-/** Ищет ровный газон 12×8 м: внутри участка, ≥4 м от домов, ≥3 м от дорожек, перепад по углам < 1 м. */
+/** Ищет газон 5×4 м для садовника: внутри участка, ≥ 1,5 м от пятен домов, ≥ 2 м от дорожек, перепад по углам до 1,2 м,
+ *  вода и граница не ближе 5 м. Прежние условия (6×5 м, 3 м от домов, 8 м от воды) на плотном участке не выполнялись
+ *  нигде — садовника в сцене не было. */
 export function findLawn(houses: HouseLite[], net: PathNet, heightAt: (x: number, z: number) => number | null, inSite: (x: number, z: number) => boolean, seed = 3, water: (x: number, z: number) => boolean = () => false): [number, number, number, number] | null {
   const r = rng(seed); let best: { s: number; rect: [number, number, number, number] } | null = null;
   const dbg = { site: 0, house: 0, path: 0, null: 0, slope: 0, ok: 0 }; (window as unknown as { __lawnDbg: unknown }).__lawnDbg = dbg;
   for (let k = 0; k < 5000; k++) {
-    const cx = -90 + r() * 180, cz = -70 + r() * 140; const w = 6, d = 5;
+    const cx = -90 + r() * 180, cz = -70 + r() * 140; const w = 5, d = 4;
     const corners: [number, number][] = [[cx - w / 2, cz - d / 2], [cx + w / 2, cz - d / 2], [cx - w / 2, cz + d / 2], [cx + w / 2, cz + d / 2], [cx, cz]];
     if (!corners.every(([x, z]) => inSite(x, z))) { dbg.site++; continue; }
-    const dh = Math.min(...corners.map(([x, z]) => distToHouses(houses, x, z))); if (dh < 3) { dbg.house++; continue; } // не под террасами и фундаментами
-    const dp = Math.min(...corners.map(([x, z]) => distToPaths(net, x, z))); if (dp < 2.5) { dbg.path++; continue; }
+    const dh = Math.min(...corners.map(([x, z]) => distToHouses(houses, x, z))); if (dh < 1.5) { dbg.house++; continue; } // не под террасами и фундаментами
+    const dp = Math.min(...corners.map(([x, z]) => distToPaths(net, x, z))); if (dp < 2.0) { dbg.path++; continue; }
     const hs = corners.map(([x, z]) => heightAt(x, z)); if (hs.some((v) => v === null)) { dbg.null++; continue; }
     // вокруг площадки (+8 м) ни одной точки воды: косилка не должна ездить по берегу и по воде
-    let wet = false; for (let x = cx - w / 2 - 8; x <= cx + w / 2 + 8 && !wet; x += 1) for (let z = cz - d / 2 - 8; z <= cz + d / 2 + 8; z += 1) if (heightAt(x, z) === null || !inSite(x, z) || water(x, z)) { wet = true; break; } // от воды не ближе 8 м
+    let wet = false; for (let x = cx - w / 2 - 5; x <= cx + w / 2 + 5 && !wet; x += 1) for (let z = cz - d / 2 - 5; z <= cz + d / 2 + 5; z += 1) if (heightAt(x, z) === null || !inSite(x, z) || water(x, z)) { wet = true; break; } // от воды не ближе 8 м
     if (wet) { dbg.null++; continue; }
-    const range = Math.max(...(hs as number[])) - Math.min(...(hs as number[])); if (range > 1.6) { dbg.slope++; continue; }
+    const range = Math.max(...(hs as number[])) - Math.min(...(hs as number[])); if (range > 1.2) { dbg.slope++; continue; }
     dbg.ok++;
     const s = Math.min(dh, 10) + Math.min(dp, 6) - range * 3;
     if (!best || s > best.s) best = { s, rect: [cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2] };
@@ -346,12 +348,13 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     const graph = buildGraph(net); const r = rng(11);
     const walkers: Walker[] = [];
     const n = graph.edges.length;
-    for (let i = 0; i < 6 && n; i++) {
+    // правостороннее движение: каждый держится в 0,55 м справа от оси дорожки — встречные расходятся бортами, а не лбами
+    for (let i = 0; i < (input.mobile ? 6 : 8) && n; i++) {
       const gid = GUEST_IDS[(i * 7 + 3) % GUEST_IDS.length]; const h = makeSkinnedHuman(charOf(gid), gid.startsWith('f_'), 100 + i);
       const edge = Math.floor(r() * n); const e = graph.edges[edge];
       // гости 1 и 3 идут парой со своим «ведущим» (0 и 2): тем же путём, на шаг позади и чуть сбоку
       const leader = i === 1 || i === 3 ? i - 1 : undefined;
-      walkers.push({ h, edge, from: r() < 0.5 ? e.a : e.b, t: r(), speed: 0.9 + r() * 0.5, yaw: 0, pause: 0, greet: 0, cool: 0, leader, side: i % 2 ? 0.7 : 0 });
+      walkers.push({ h, edge, from: r() < 0.5 ? e.a : e.b, t: r(), speed: 0.9 + r() * 0.5, yaw: 0, pause: 0, greet: 0, cool: 0, leader, side: leader !== undefined ? 1.05 : 0.5, f: 1, blocked: 0, dodge: 0, dodgeT: 0 });
     }
     // пловцы: в бассейнах длиной ≥ 5 м, по одному; в самом большом — двое
     const big = pools.filter((b) => { const s = b.getSize(tmp2); return Math.max(s.x, s.z) >= 5 && Math.min(s.x, s.z) >= 2.2; })
@@ -391,6 +394,12 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
         sunbathers.push({ h, lounger, x: p.x, y, z: p.z, yaw: p.yaw });
       });
     });
+    // загорающие на шезлонгах террас у бассейнов (мебель виллы, места 'lie'): не больше одного на дом, всего до шести
+    { const seenH = new Set<string>(); const first: TerraceSpotW[] = [];
+      for (const sp of terraceSpots) { if (sp.kind !== 'lie' || seenH.has(sp.house)) continue; seenH.add(sp.house); first.push(sp); }
+      const n = Math.min(6, first.length); // равномерно по списку домов: и ряд 1.x, и виллы 2.x, и вилла 3
+      for (let k = 0; k < n; k++) { const sp = first[n > 1 ? Math.round((k * (first.length - 1)) / (n - 1)) : 0];
+        const gid: CharId = k % 2 ? 'f_casual' : 'm_beach'; sunbathers.push({ h: makeSkinnedHuman(charOf(gid), gid.startsWith('f_'), 761 + k), lounger: null, x: sp.x, y: sp.y, z: sp.z, yaw: sp.yaw }); } }
     // второй садовник: поливает кусты из лейки, обходя 3–4 ближних куста
     let waterer: Waterer | null = null;
     const inside = shrubs.filter((p) => inSite(p.x, p.z) && distToPaths(net, p.x, p.z) > 1.2 && distToHouses(houses, p.x, p.z) > 1.2);
@@ -420,6 +429,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
       let gi = 0;
       for (const sp of chosen.slice(0, 12)) {
         const mk = (x: number, z: number, yaw: number, anim: Idler['anim']) => { const id = GUEST_IDS[(gi * 3 + 1) % GUEST_IDS.length]; gi++; /* шаг 3 взаимно прост с длиной списка (5) — соседи разные */ standing.push({ h: makeSkinnedHuman(charOf(id), id.startsWith('f_'), 950 + gi), x, y: sp.y, z, yaw, cur: yaw, greet: 0, cool: 0, role: 'guest', anim }); };
+        if (sp.kind === 'lie') continue;
         if (sp.kind === 'sit') mk(sp.x, sp.z, sp.yaw, 'sit');
         else if (rt() < 0.45) { const px = Math.cos(sp.yaw), pz = -Math.sin(sp.yaw); mk(sp.x - px * 0.42, sp.z - pz * 0.42, sp.yaw + 0.75, 'idle'); mk(sp.x + px * 0.42, sp.z + pz * 0.42, sp.yaw - 0.75, 'idle2'); } // пара беседует, глядя на вид
         else mk(sp.x, sp.z, sp.yaw, rt() < 0.5 ? 'idle' : 'idle2');
@@ -434,7 +444,7 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     for (const w of state.walkers) g.add(w.h.root);
     for (const s of state.swimmers) g.add(s.h.root);
     if (state.gardener) { g.add(state.gardener.h.root); g.add(state.gardener.mower); }
-    for (const s of state.sunbathers) { g.add(s.h.root); g.add(s.lounger); }
+    for (const s of state.sunbathers) { g.add(s.h.root); if (s.lounger) g.add(s.lounger); }
     if (state.waterer) g.add(state.waterer.h.root);
     for (const b of state.birds) g.add(b.root);
     for (const i of state.standing) g.add(i.h.root);
@@ -463,7 +473,8 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
     const { graph } = state;
     const P = playerState.pos; const pt = playerTrack.current;
     if (P) { if (Math.hypot(P.x - pt.x, P.z - pt.z) < 0.12) pt.still += d; else { pt.still = 0; pt.x = P.x; pt.z = P.z; } } else pt.still = 0;
-    for (const w of state.walkers) {
+    for (let wi = 0; wi < state.walkers.length; wi++) {
+      const w = state.walkers[wi];
       const e = graph.edges[w.edge]; const a = graph.nodes[w.from], b = graph.nodes[w.from === e.a ? e.b : e.a];
       const L = Math.max(0.01, a.distanceTo(b));
       w.cool = Math.max(0, w.cool - d);
@@ -473,21 +484,39 @@ export function Npcs({ net, heightAt, houses, pools, inSite, audioBase = '', shr
       if (lead) { // идёт за ведущим тем же путём, на 1,1 м позади; стоит, когда стоит он
         const le = graph.edges[lead.edge]; const la = graph.nodes[lead.from], lb = graph.nodes[lead.from === le.a ? le.b : le.a];
         w.edge = lead.edge; w.from = lead.from; w.t = Math.max(0, lead.t - 1.1 / Math.max(0.01, la.distanceTo(lb)));
-        if (lead.pause > 0 || lead.greet > 0) animate(w.h, 'idle', t + w.h.opts.seed!); else animate(w.h, 'walk', t + w.h.opts.seed!, lead.speed);
+        if (lead.pause > 0 || lead.greet > 0 || lead.f < 0.15) animate(w.h, 'idle', t + w.h.opts.seed!); else animate(w.h, 'walk', t + w.h.opts.seed!, lead.speed * lead.f);
       }
       else if (w.pause > 0) { w.pause -= d; animate(w.h, 'idle', t + w.h.opts.seed!); }
       else {
-        w.t += (w.speed * d) / L;
+        // кто впереди: другой гость (не своя пара), садовник или игрок — ближе 1,25 м по ходу и не дальше 0,75 м вбок.
+        // Идущий сзади притормаживает до полной остановки в 0,8 м; встречные идут каждый по своей стороне и сюда не попадают
+        const wp = w.h.root.position, dxh = Math.sin(w.yaw), dzh = Math.cos(w.yaw); let f = 1, byPlayer = false;
+        const see = (ox: number, oy: number, oz: number, player = false) => { if (Math.abs(oy - wp.y) > 1.6) return; const vx = ox - wp.x, vz = oz - wp.z; const ahead = vx * dxh + vz * dzh; if (ahead < 0.12 || ahead > 1.25 || Math.abs(vx * dzh - vz * dxh) > 0.75) return; const k = Math.max(0, Math.min(1, (ahead - 0.8) / 0.45)); if (k < f) { f = k; byPlayer = player; } };
+        if (w.dodgeT <= 0) {
+          state.walkers.forEach((o, oi) => { if (o === w || o.leader === wi || w.leader === oi) return; const q = o.h.root.position; see(q.x, q.y, q.z); });
+          if (state.gardener) { const q = state.gardener.h.root.position; see(q.x, q.y, q.z); }
+          if (state.waterer) { const q = state.waterer.h.root.position; see(q.x, q.y, q.z); }
+          if (P) see(P.x, P.y, P.z, true);
+        }
+        w.f += (f - w.f) * Math.min(1, d * 6);
+        if (f < 0.1) w.blocked += d; else w.blocked = 0;
+        if (w.blocked > 2.2) { // стоит дольше двух секунд: перед игроком разворачивается, встречного обходит, шагнув дальше вправо
+          if (byPlayer) { w.from = w.from === e.a ? e.b : e.a; w.t = 1 - w.t; } else { w.dodge = 0.75; }
+          w.dodgeT = 3.5; w.blocked = 0;
+        }
+        if (w.dodgeT > 0) { w.dodgeT -= d; if (w.dodgeT <= 0) w.dodge = 0; }
+        w.t += (w.speed * w.f * d) / L;
         if (w.t >= 1) { // в узле: следующее ребро (не назад, если есть выбор), иногда постоять
           const to = w.from === e.a ? e.b : e.a; const opts = graph.adj[to].filter((k) => k !== w.edge);
           const next = opts.length ? opts[Math.floor(Math.random() * opts.length)] : w.edge;
           w.edge = next; w.from = to; w.t = 0; if (Math.random() < 0.25) w.pause = 2 + Math.random() * 4;
         }
-        animate(w.h, 'walk', t + w.h.opts.seed!, w.speed);
+        if (w.f < 0.15) animate(w.h, 'idle', t + w.h.opts.seed!); else animate(w.h, 'walk', t + w.h.opts.seed!, w.speed * w.f);
       }
       const e2 = graph.edges[w.edge]; const a2 = graph.nodes[w.from], b2 = graph.nodes[w.from === e2.a ? e2.b : e2.a];
       const yaw = Math.atan2(b2.x - a2.x, b2.z - a2.z); let dy = yaw - w.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); w.yaw += dy * Math.min(1, d * 6);
-      const x = a2.x + (b2.x - a2.x) * w.t + Math.cos(yaw) * w.side, z = a2.z + (b2.z - a2.z) * w.t - Math.sin(yaw) * w.side;
+      const sd = w.side + w.dodge; (w as Walker & { sideNow?: number }).sideNow = ((w as Walker & { sideNow?: number }).sideNow ?? sd) + (sd - ((w as Walker & { sideNow?: number }).sideNow ?? sd)) * Math.min(1, d * 3); const so = (w as Walker & { sideNow?: number }).sideNow!;
+      const x = a2.x + (b2.x - a2.x) * w.t - Math.cos(w.yaw) * so, z = a2.z + (b2.z - a2.z) * w.t + Math.sin(w.yaw) * so; // вправо от хода: (−cos, +sin) при направлении (sin, cos)
       let y = heightAt(x, z); const st = stepAt?.(x, z); if (st !== null && st !== undefined && (y === null || st > y)) y = st; // на лестнице — по верху ступени, а не по пандусу под ней
       w.h.root.position.set(x, (y ?? w.h.root.position.y) + 0.02, z); w.h.root.rotation.y = w.yaw;
     }

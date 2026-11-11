@@ -598,7 +598,7 @@ function furnishOpenPlan(p: Placer, r: RoomInfo, seed: number) {
 }
 
 /** Места для гостей на террасах (координаты виллы): у наружного края (стоять, смотреть на вид) и на диване (сидеть). */
-export type TerraceSpot = { x: number; y: number; z: number; yaw: number; kind: 'rail' | 'sit' };
+export type TerraceSpot = { x: number; y: number; z: number; yaw: number; kind: 'rail' | 'sit' | 'lie' };
 let spots: TerraceSpot[] = []; let bboxC: [number, number] = [0, 0];
 function furnishTerrace(p: Placer, r: RoomInfo, seed: number) {
   const R = r.rect, W = R.x1 - R.x0, D = R.z1 - R.z0; const area = r.area ?? W * D; const short = Math.min(W, D), long = Math.max(W, D);
@@ -619,7 +619,7 @@ function furnishTerrace(p: Placer, r: RoomInfo, seed: number) {
           const ex = o.x ? (o.x > 0 ? b.x1 : b.x0) + o.x * 1.65 : cx0 + a, ez = o.z ? (o.z > 0 ? b.z1 : b.z0) + o.z * 1.65 : cz0 + a; // центр пары
           if (!p.free(ex, ez, yaw, 2.0, 2.0, 0)) continue;
           const t = o.x ? new Vector3(0, 0, 1) : new Vector3(1, 0, 0);
-          let ok = 0; for (const sg of [-1, 1]) if (p.put(F.lounger(), ex + t.x * sg * 0.62, ez + t.z * sg * 0.62, yaw, 0.72, 1.95, p.matte, 0)) ok++;
+          let ok = 0; for (const sg of [-1, 1]) if (p.put(F.lounger(), ex + t.x * sg * 0.62, ez + t.z * sg * 0.62, yaw, 0.72, 1.95, p.matte, 0)) { ok++; if (sg < 0) spots.push({ x: ex + t.x * sg * 0.62, y: r.y, z: ez + t.z * sg * 0.62, yaw, kind: 'lie' }); } // на одном шезлонге пары может лежать гость
           if (!ok) continue;
           p.put(F.sideTable(), ex + o.x * 0.6, ez + o.z * 0.6, 0, 0.42, 0.42, p.matte, 0);
           if (!covered) p.put(F.umbrella(), ex + o.x * 1.3, ez + o.z * 1.3, 0, 0.5, 0.5, p.matte, 0);

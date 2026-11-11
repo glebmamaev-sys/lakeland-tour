@@ -870,7 +870,11 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // шириной, в ней проступала вода. Теперь под воду уходят только вершины в глубине сетки (все соседи тоже внутри),
       // а кольцо у края остаётся на своей высоте, на 0,35 м ниже сетки участка, которая его и накрывает
       const inG = (px: number, pz: number) => inPoly(px, pz, c.site.boundary) || inGrid(px, pz, 2);
-      if (inG(x, z)) y = isWater(x, z, raw) || (inG(x - st, z) && inG(x + st, z) && inG(x, z - st) && inG(x, z + st) && inG(x - st, z - st) && inG(x + st, z + st) && inG(x - st, z + st) && inG(x + st, z - st)) ? Math.min(y, W - 3) : raw - 0.35;
+      // кромка: ниже самой низкой точки сетки участка в соседних ячейках (±10 м). Участок у границы местами подрезан
+      // (площадка магазина, выравнивание под дорожки): просто «на 0,35 м ниже своей высоты» оказывалось выше участка,
+      // и трава окрестностей накрывала парковку у ворот
+      const ringY = (px: number, pz: number, r0: number) => { let m = r0; for (const dx of [-10, -5, 0, 5, 10]) for (const dz of [-10, -5, 0, 5, 10]) { const sy = siteAt(px + dx, pz + dz); if (sy !== null && sy < m) m = sy; } return m - 0.35; };
+      if (inG(x, z)) y = isWater(x, z, raw) || (inG(x - st, z) && inG(x + st, z) && inG(x, z - st) && inG(x, z + st) && inG(x - st, z - st) && inG(x + st, z + st) && inG(x - st, z + st) && inG(x + st, z - st)) ? Math.min(y, W - 3) : ringY(x, z, raw);
       else if (isWater(x, z, raw)) y = Math.min(y, W - 3); // вода вне сетки участка — глубоко (сквозь непрозрачную воду дна не видно)
       dp.set([x, y, z], k * 3); du.set([x / 12, z / 12], k * 2);
       const lc = coverAt(x, z); const cc = y < W + 1.5 ? shore : (lc === 2 ? openCol : landCol); dcol.set([cc.r, cc.g, cc.b], k * 3);

@@ -33,6 +33,20 @@ const COLLECT = `(() => {
     perf: window.__gl ? { tris: window.__gl.info.render.triangles, calls: window.__gl.info.render.calls } : null };
 })()`;
 
+/** Проверка прогулки — выполняется в странице: включить «Пешком», убедиться, что игрок стоит на покрытии парковки,
+ *  что подпорная стенка его держит (идём в середину самой длинной стенки с нижней стороны) и что жители на месте. */
+const WALKCHECK = `(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms)); const B = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Пешком'); if (!B) return null; B.click();
+  const t0 = Date.now(); while (!window.__tour && Date.now() - t0 < 20000) await sleep(300); if (!window.__tour) return { tour: false }; await sleep(4500);
+  const c = window.__complex, T = window.__tour, S = window.__npcs; const g0 = c.heightAt(T.pos.x, T.pos.z); const stand = g0 === null ? null : +(T.pos.y - g0).toFixed(2);
+  let wall = null; const ws = c.terraces ? c.terraces.walls : [];
+  if (ws.length) { const len = (w) => w.pts.reduce((s, q, k) => (k ? s + Math.hypot(q[0] - w.pts[k - 1][0], q[1] - w.pts[k - 1][1]) : 0), 0); const w = ws.slice().sort((a, b) => len(b) - len(a))[0];
+    const n = w.pts.length, i = Math.floor(n / 2), a = w.pts[Math.max(0, i - 1)], b = w.pts[Math.min(n - 1, i + 1)], p = w.pts[i]; const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1; const nx = (-(b[1] - a[1]) / L) * w.low, nz = ((b[0] - a[0]) / L) * w.low;
+    const sx = p[0] + nx * 1.6, sz = p[1] + nz * 1.6, gy = c.heightAt(sx, sz);
+    if (gy !== null) { T.input.teleport = [sx, gy + 0.5, sz]; T.input.yaw = Math.atan2(nx, nz); T.input.fwd = 0; await sleep(800); T.input.fwd = 1; await sleep(2600); T.input.fwd = 0; await sleep(200); wall = +(-((T.pos.x - p[0]) * nx + (T.pos.z - p[1]) * nz)).toFixed(2); } }
+  return { tour: true, stand, wall, walkers: S ? S.walkers.length : 0, sunbathers: S ? S.sunbathers.length : 0, gardener: !!(S && S.gardener), standing: S ? S.standing.length : 0 };
+})()`;
+
 /** Плоский список расхождений двух значений (эталон → сейчас). */
 function diff(a, b, at = '') {
   if (JSON.stringify(a) === JSON.stringify(b)) return [];
@@ -71,6 +85,7 @@ async function main() {
     const built = stage === 'terrain:done'; const secs = ((Date.now() - t0) / 1000).toFixed(0);
     if (built) await sleep(1500); // дорисовать кадр и собрать поздние ошибки
     const data = built ? await tab.evaluate(COLLECT) : null;
+    const walk = built ? await tab.evaluate(WALKCHECK).catch(() => null) : null;
 
     // показатели из журнала сцены (последняя запись по каждому ключу: эффекты React в разработке срабатывают дважды)
     const entries = {}, strips = {}; let pads = null;
@@ -83,6 +98,7 @@ async function main() {
       else if ((m = l.match(/^\[pads\] .*: (\d+)$/))) pads = Number(m[1]);
     }
     const snapshot = data && { floors: data.floors, rooms: data.rooms, path: data.path, pathLines: data.pathLines, flights: data.flights, steps: data.steps, walls: data.walls,
+      residents: walk ? { walkers: walk.walkers, sunbathers: walk.sunbathers, gardener: walk.gardener } : null,
       lotus: data.lotus, gate: data.gate, arrive: data.arrive, lamps: data.lamps, village: data.village, roadsKm: data.roadsKm, trees: data.trees, entries, strips: Object.fromEntries(Object.entries(strips).sort()), pads };
     const baseline = existsSync(BASELINE) ? JSON.parse(await readFile(BASELINE, 'utf8')) : null;
 
@@ -103,6 +119,8 @@ async function main() {
       const pf = data.perf; check(`нагрузка кадра с дрона в бюджете (${pf ? (pf.tris / 1e6).toFixed(2) + ' млн треугольников, ' + pf.calls + ' вызовов' : 'нет данных'})`, !!pf && pf.tris <= 3.5e6 && pf.calls <= 700, 'бюджет: 3,5 млн треугольников и 700 вызовов отрисовки');
       check(`вечерний режим и светильники дорожек на месте (${data.lamps} шт.)`, data.evening && data.lamps >= 15, 'нет переключателя вечера или мало светильников');
       check(`окружение на месте (домов ${data.village}, дорог ${data.roadsKm} км, деревьев ${data.trees})`, data.village >= 100 && data.roadsKm >= 10 && data.trees >= 500, 'нет деревни, дорог или рощ за границей участка');
+      check(`прогулка: игрок стоит на парковке, стенка его держит${walk ? ` (над землёй ${walk.stand} м, за стенку ${walk.wall} м)` : ''}`, !!walk && walk.tour && walk.stand !== null && walk.stand > -0.1 && walk.stand < 0.9 && (walk.wall === null || walk.wall < 0.3), walk ? 'игрок провалился, завис или перешёл стенку' : 'режим «Пешком» не включился');
+      check(`жители на месте${walk ? ` (гуляют ${walk.walkers}, загорают ${walk.sunbathers}, стоят и сидят ${walk.standing}, садовник ${walk.gardener ? 'есть' : 'нет'})` : ''}`, !!walk && walk.walkers >= 6 && walk.sunbathers >= 3 && walk.gardener && walk.standing >= 5, 'нет гостей, загорающих или садовника');
       check('нет комнат-дублей (одна комната не обставлена дважды)', (data.dup ?? []).length === 0, (data.dup ?? []).join('\n      '));
       check(`оси дорожек не идут через дома и бассейны (${data.path?.pts ?? 0} точек)`, !!data.path && data.path.inHouse === 0 && data.path.inPool === 0, data.path ? `в домах ${data.path.inHouse}, в бассейнах ${data.path.inPool}` : 'нет данных');
       if (baseline && !UPDATE) {
