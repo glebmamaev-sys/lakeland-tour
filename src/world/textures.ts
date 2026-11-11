@@ -163,49 +163,69 @@ export function makeZelligeTexture(n = 512, seed = 33): CanvasTexture {
 /** Отделка «по умолчанию» для мешей Revit без текстур (один меш на материал: полы, стены, лестницы, парапеты):
  *  горизонтальные поверхности сверху — плитка известняка, вертикальные — рельеф штукатурки, низ (потолки) —
  *  гладкая. Трипланарно по мировым координатам; тёмные материалы (перила, рамы) не трогаются. */
-/** Отделка фасада: тон штукатурки (два оттенка — дома одного типа чередуются), тон верхних этажей и камень цоколя. */
-export type FacadeFinish = { tones: [string, string]; upper?: string; upperFrom?: number; plinth: Texture; plinthH?: number; plinthTint?: string };
-/** Центры домов комплекса и номер оттенка (x, z, 0…1, —): по ближайшему центру шейдер выбирает оттенок фасада. */
-export const facadeHouses = { value: Array.from({ length: 16 }, () => new Vector4(1e6, 1e6, 0, 0)) };
-
-/** Отладка: 1 — поверхности с шейдером отделки красятся по метке фасада (красный — фасад, зелёный — высота над полом). */
+/** Маска «внутри дома» типа виллы для шейдера: текстура (канал = уровень), привязка к плану, отметки уровней. Заполняется после разбора планов. */
+export type FacadeMask = { uMask: { value: Texture | null }; uMaskRect: { value: Vector4 }; uLevels: { value: Vector4 }; uMaskTop: { value: number }; uMaskOn: { value: number } };
+export const makeFacadeMask = (): FacadeMask => ({ uMask: { value: null }, uMaskRect: { value: new Vector4(0, 0, 1, 1) }, uLevels: { value: new Vector4(1e6, 1e6, 1e6, 1e6) }, uMaskTop: { value: 1e6 }, uMaskOn: { value: 0 } });
+const NO_MASK = makeFacadeMask();
+/** Отделка фасада: тон штукатурки (два оттенка — дома одного типа чередуются), тон верхних этажей, камень цоколя и маска плана. */
+export type FacadeFinish = { tones: [string, string]; upper?: string; upperFrom?: number; plinth: Texture; plinthH?: number; plinthTint?: string; mask: FacadeMask };
+/** Дома комплекса для шейдера: a = (m00, m02, tx, оттенок), b = (m20, m22, tz, ty) — строки матрицы «мир → план дома»; r — пятно дома в плане. */
+export const facadeHouses = { a: { value: Array.from({ length: 16 }, () => new Vector4()) }, b: { value: Array.from({ length: 16 }, () => new Vector4()) }, r: { value: Array.from({ length: 16 }, () => new Vector4(1e6, 1e6, 1e6, 1e6)) } };
+/** Отладка: 1 — фасадные поверхности красные (цоколь жёлтый), остальные поверхности с отделкой — тёмно-синие. */
 export const facadeDebug = { value: 0 };
 
+/** Отделка: верхние грани — плитка, стены — рельеф штукатурки, низ — гладкий. Фасад определяется в каждой точке: мировая
+ *  точка переводится в план ближайшего дома (вершинный шейдер), и если в 0,3 м перед гранью (по нормали к зрителю) по
+ *  маске своего этажа улица — это фасад: тон дома, а у первого этажа каменный цоколь. Геометрия не трогается. */
 export function applyInteriorFinish(m: MeshStandardMaterial, tile: Texture, stucco: Texture, tileScale = 1 / 2.4, stuccoScale = 0.5, facade?: FacadeFinish, facadeOnly = false) {
   m.userData.finish = true;
-  const fac = { uFacHouses: facadeHouses, uToneA: { value: new Color(facade?.tones[0] ?? '#ffffff') }, uToneB: { value: new Color(facade?.tones[1] ?? '#ffffff') }, uToneUp: { value: new Color(facade?.upper ?? facade?.tones[0] ?? '#ffffff') },
-    uUpperFrom: { value: facade?.upper ? facade.upperFrom ?? 3 : 1e3 }, uPlinth: { value: facade?.plinth ?? stucco }, uPlinthH: { value: facade ? facade.plinthH ?? 0.5 : -1e3 }, uPlinthTint: { value: new Color(facade?.plinthTint ?? '#ffffff') }, uFacOnly: { value: facadeOnly ? 1 : 0 }, uFacDbg: facadeDebug };
+  const mk = facade?.mask ?? NO_MASK;
+  const fac = { uFacA: facadeHouses.a, uFacB: facadeHouses.b, uFacR: facadeHouses.r, uMask: mk.uMask, uMaskRect: mk.uMaskRect, uLevels: mk.uLevels, uMaskTop: mk.uMaskTop, uMaskOn: mk.uMaskOn,
+    uToneA: { value: new Color(facade?.tones[0] ?? '#ffffff') }, uToneB: { value: new Color(facade?.tones[1] ?? '#ffffff') }, uToneUp: { value: new Color(facade?.upper ?? facade?.tones[0] ?? '#ffffff') },
+    uUpperFrom: { value: facade?.upper ? facade.upperFrom ?? 3 : 1e3 }, uPlinth: { value: facade?.plinth ?? stucco }, uPlinthH: { value: facade?.plinthH ?? 0.5 }, uPlinthTint: { value: new Color(facade?.plinthTint ?? '#ffffff') },
+    uFacOnly: { value: facadeOnly ? 1 : 0 }, uFacDbg: facadeDebug };
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uEve = uEve; sh.uniforms.uTile = { value: tile }; sh.uniforms.uStucco = { value: stucco }; sh.uniforms.uTileScale = { value: tileScale }; sh.uniforms.uStuccoScale = { value: stuccoScale };
     Object.assign(sh.uniforms, fac);
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vFPos; varying vec3 vFNrm; attribute vec2 aFac; varying vec2 vFac; varying float vTone; uniform vec4 uFacHouses[16];')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFPos; varying vec3 vFNrm; varying vec3 vPlan; varying vec2 vHouse; uniform vec4 uFacA[16]; uniform vec4 uFacB[16]; uniform vec4 uFacR[16];')
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
-        vFPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vFNrm = normalize(mat3(modelMatrix) * objectNormal); vFac = aFac; vTone = 0.0;
-        if (aFac.x > 0.0) { float best = 1e12; for (int i = 0; i < 16; i++) { vec2 d = vFPos.xz - uFacHouses[i].xy; float q = dot(d, d); if (q < best) { best = q; vTone = uFacHouses[i].z; } } }`);
+        vFPos = (modelMatrix * vec4(transformed, 1.0)).xyz; vFNrm = normalize(mat3(modelMatrix) * objectNormal); vPlan = vFPos; vHouse = vec2(0.0);
+        { float best = 6.0; // ближайшее пятно дома (не дальше 6 м): точка в координатах его плана
+          for (int i = 0; i < 16; i++) { vec4 A = uFacA[i]; vec4 B = uFacB[i]; vec4 R = uFacR[i]; vec2 l = vec2(A.x * vFPos.x + A.y * vFPos.z + A.z, B.x * vFPos.x + B.y * vFPos.z + B.z);
+            float d = length(max(vec2(0.0), max(R.xy - l, l - R.zw))); if (d < best) { best = d; vPlan = vec3(l.x, vFPos.y + B.w, l.y); vHouse = vec2(1.0, A.w); } } }`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vFPos; varying vec3 vFNrm; varying vec2 vFac; varying float vTone; uniform sampler2D uTile; uniform sampler2D uStucco; uniform sampler2D uPlinth; uniform float uTileScale; uniform float uStuccoScale; uniform float uEve; uniform vec3 uToneA; uniform vec3 uToneB; uniform vec3 uToneUp; uniform vec3 uPlinthTint; uniform float uUpperFrom; uniform float uPlinthH; uniform float uFacOnly; uniform float uFacDbg;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFPos; varying vec3 vFNrm; varying vec3 vPlan; varying vec2 vHouse; uniform sampler2D uTile; uniform sampler2D uStucco; uniform sampler2D uPlinth; uniform sampler2D uMask; uniform vec4 uMaskRect; uniform vec4 uLevels; uniform float uMaskTop; uniform float uMaskOn; uniform float uTileScale; uniform float uStuccoScale; uniform float uEve; uniform vec3 uToneA; uniform vec3 uToneB; uniform vec3 uToneUp; uniform vec3 uPlinthTint; uniform float uUpperFrom; uniform float uPlinthH; uniform float uFacOnly; uniform float uFacDbg;')
       // вечер: потолки и подшивки навесов светятся тёплым (как от ламп под ними), стены и полы — едва заметно
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{ float ny = normalize(vFNrm).y; float lum2 = dot(diffuseColor.rgb, vec3(0.3, 0.59, 0.11)); if (lum2 > 0.3) totalEmissiveRadiance += uEve * vec3(1.0, 0.74, 0.46) * (ny < -0.6 ? 0.62 : 0.07) * diffuseColor.rgb; }')
       .replace('#include <map_fragment>', `#include <map_fragment>
         {
           vec3 c = diffuseColor.rgb; float lum = dot(c, vec3(0.3, 0.59, 0.11));
-          if (lum > 0.45 && (uFacOnly < 0.5 || vFac.x > 0.5)) { // uFacOnly: материал без общей отделки (шторы вместе со стенами) — только фасадные грани
-            vec3 n = normalize(vFNrm); vec3 an = abs(n);
+          vec3 n = normalize(vFNrm); vec3 an = abs(n);
+          // фасад: нормаль грани к зрителю — из производных (не зависит от обхода вершин и двусторонности материала)
+          float ext = 0.0; float behind = 0.0; float fh = vPlan.y - uLevels.x;
+          if (uMaskOn > 0.5 && vHouse.x > 0.999 && an.y < 0.6) {
+            vec3 fn = cross(dFdx(vPlan), dFdy(vPlan)); vec2 d = fn.xz / max(length(fn.xz), 1e-9) * 0.3;
+            float y = vPlan.y - 0.05;
+            vec4 lw = y >= uLevels.w ? vec4(0.0, 0.0, 0.0, 1.0) : y >= uLevels.z ? vec4(0.0, 0.0, 1.0, 0.0) : y >= uLevels.y ? vec4(0.0, 1.0, 0.0, 0.0) : vec4(1.0, 0.0, 0.0, 0.0);
+            float ins = vPlan.y > uMaskTop ? 0.0 : dot(texture2D(uMask, (vPlan.xz + d - uMaskRect.xy) * uMaskRect.zw), lw);
+            ext = ins < 0.5 ? 1.0 : 0.0;
+            behind = texture2D(uMask, (vPlan.xz - d - uMaskRect.xy) * uMaskRect.zw).r; // за гранью — нижний этаж дома: у стены есть цоколь
+          }
+          if (lum > 0.45 && (uFacOnly < 0.5 || ext > 0.5)) { // uFacOnly: материал со своей текстурой — меняются только фасадные грани
             if (n.y > 0.6) { vec3 t = texture2D(uTile, vFPos.xz * uTileScale).rgb; diffuseColor.rgb = t * mix(vec3(1.0), c / max(lum, 0.3), 0.25); }
             else if (n.y < -0.6) { diffuseColor.rgb = c * 1.02; }
             else {
               vec2 uv = an.x > an.z ? vFPos.zy : vFPos.xy; float w = texture2D(uStucco, uv * uStuccoScale).g; vec3 wall = c * mix(0.9, 1.06, w);
-              // фасад (метка aFac: наружная грань по планам этажей, высота над полом нижнего уровня): каменный цоколь, выше — тон дома
-              if (vFac.x > 0.5) {
-                float h = vFac.y * 10.0 - 2.0;
-                if (h < uPlinthH) wall = texture2D(uPlinth, uv * 0.8).rgb * uPlinthTint * mix(0.92, 1.0, w);
-                else { vec3 tone = h > uUpperFrom ? uToneUp : mix(uToneA, uToneB, vTone); wall *= tone * mix(0.94, 1.0, smoothstep(uPlinthH, uPlinthH + 1.4, h)); }
+              if (ext > 0.5) {
+                bool ground = behind > 0.5 && fh > -1.8;
+                if (ground && fh < uPlinthH) wall = texture2D(uPlinth, uv * 0.8).rgb * uPlinthTint * mix(0.92, 1.0, w);
+                else { vec3 tone = fh > uUpperFrom ? uToneUp : mix(uToneA, uToneB, vHouse.y); wall *= tone * (ground ? mix(0.94, 1.0, smoothstep(uPlinthH, uPlinthH + 1.4, fh)) : 1.0); }
               }
               diffuseColor.rgb = wall;
             }
           }
-          if (uFacDbg > 0.5) diffuseColor.rgb = vec3(vFac.x, vFac.y, uFacOnly);
+          if (uFacDbg > 0.5) diffuseColor.rgb = ext > 0.5 ? vec3(1.0, behind > 0.5 && fh < uPlinthH && fh > -1.8 ? 1.0 : 0.0, 0.0) : vec3(0.0, 0.0, 0.35);
         }`);
   };
   m.needsUpdate = true;

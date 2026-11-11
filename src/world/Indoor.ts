@@ -10,7 +10,8 @@ import type { Plan } from '../plan';
 export type IndoorMask = { levels: { level: number; data: Uint8Array }[]; data: Uint8Array; floor: Float32Array; green: Uint8Array; greenFloor: Float32Array; x0: number; z0: number; step: number; nx: number; nz: number }; // green: посадки внутри пятна — газон на отметке своего уровня
 const STEP = 0.1, GROW = 0.5;
 
-export function buildIndoor(plan: Plan, glass: Box3[], greenRects: { rect: { x0: number; z0: number; x1: number; z1: number }; level: number }[] = []): IndoorMask {
+/** minTop — стекло ниже этой высоты над полом стеной не считается (0,5 — как раньше; 1,5 для фасадной маски: ограждения террас). */
+export function buildIndoor(plan: Plan, glass: Box3[], greenRects: { rect: { x0: number; z0: number; x1: number; z1: number }; level: number }[] = [], minTop = 0.5): IndoorMask {
   const [bx0, bz0, bx1, bz1] = plan.bbox; const x0 = bx0 - 1.5, z0 = bz0 - 1.5;
   const nx = Math.ceil((bx1 + 1.5 - x0) / STEP) + 1, nz = Math.ceil((bz1 + 1.5 - z0) / STEP) + 1; const N = nx * nz;
   const data = new Uint8Array(N), floor = new Float32Array(N).fill(Infinity), green = new Uint8Array(N), greenFloor = new Float32Array(N).fill(Infinity);
@@ -27,7 +28,7 @@ export function buildIndoor(plan: Plan, glass: Box3[], greenRects: { rect: { x0:
     };
     for (const poly of l.wallPolys ?? []) { let ax = Infinity, az = Infinity, bx = -Infinity, bz = -Infinity; for (let k = 0; k < poly.length; k += 2) { ax = Math.min(ax, poly[k]); bx = Math.max(bx, poly[k]); az = Math.min(az, poly[k + 1]); bz = Math.max(bz, poly[k + 1]); } rect(ax, az, bx, bz); }
     if (!(l.wallPolys ?? []).length) for (const [x1, z1, x2, z2] of l.walls) rect(Math.min(x1, x2) - 0.12, Math.min(z1, z2) - 0.12, Math.max(x1, x2) + 0.12, Math.max(z1, z2) + 0.12);
-    for (const b of glass) if (b.max.y > l.level + 0.5 && b.min.y < l.level + 2.4) rect(b.min.x, b.min.z, b.max.x, b.max.z);
+    for (const b of glass) if (b.max.y > l.level + minTop && b.min.y < l.level + 2.4) rect(b.min.x, b.min.z, b.max.x, b.max.z);
     const big = dilate(wall);
     // заливка снаружи
     const reached = new Uint8Array(N); const q: number[] = [];

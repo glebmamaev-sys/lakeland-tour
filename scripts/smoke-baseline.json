@@ -123,10 +123,13 @@
   "roadsKm": 40.7,
   "trees": 3309,
   "facade": {
-    "villa1": 28215,
-    "villa21": 75402,
-    "villa22": 76404,
-    "villa3": 25758
+    "masks": {
+      "villa1": 4,
+      "villa21": 2,
+      "villa22": 2,
+      "villa3": 2
+    },
+    "houses": 11
   },
   "entries": {
     "2.1": "подход",
