@@ -102,14 +102,14 @@
   },
   "pathLines": 16,
   "flights": 7,
-  "steps": 56,
-  "walls": 9,
+  "steps": 57,
+  "walls": 11,
   "residents": {
     "walkers": 8,
     "sunbathers": 8,
     "gardener": true
   },
-  "lotus": 2767,
+  "lotus": 2679,
   "gate": [
     -56.8,
     -44.5
@@ -119,9 +119,9 @@
     -48.5
   ],
   "lamps": 23,
-  "village": 357,
+  "village": 359,
   "roadsKm": 40.7,
-  "trees": 3309,
+  "trees": 3306,
   "facade": {
     "masks": {
       "villa1": 4,

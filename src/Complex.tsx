@@ -98,6 +98,11 @@ const placePalm = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r * 6.28
 const placePalmShort = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r * 6.28, height: 5 + p.s * 3, lean: (p.r - 0.5) * 0.12, leanDir: p.s * 6.28 });
 const placeBush = (p: Plant) => ({ x: p.x, y: p.y + 0.1, z: p.z, yaw: p.r * 6.28, height: 0.7 + p.s * 0.9 });
 const placeTree = (p: Plant) => ({ x: p.x, y: p.y + 0.05, z: p.z, yaw: p.r * 6.28, height: 4 + p.s * 2.5 });
+// Края воды, подведённой к виллам (метры сцены, от участка наружу к берегу OSM): западный — от юго-западного угла
+// участка, северный — от северной границы у виллы 2.4. Ломаные сглаживаются; земля за ними остаётся сухой
+const SHORE_GUIDE_W: [number, number][] = [[-66.5, 54], [-90, 60], [-120, 76], [-150, 102], [-172, 132], [-176, 150]];
+const SHORE_GUIDE_N: [number, number][] = [[14, -170], [9, -150], [-2, -130], [-13, -110], [-20, -90], [-20, -72], [-16, -58], [-12, -46]];
+const SHORE_SLOPE = 0.35; // уклон берега окрестностей, м на метр от уреза
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
 type BuiltScene = { siteSkirt: BufferGeometry | null; roads: BufferGeometry | null; windows: BufferGeometry | null; trees: Plant[]; lamps: Lamps | null; entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; arrive: { x: number; z: number; yaw: number } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
@@ -516,7 +521,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     // лагуна подведена к виллам: по замечанию заказчика от уреза воды до домов должно быть ~10 м (берег OSM дальше
     // реального). Заливаем водой клетки между участком и лагуной: не ближе 10 м к любому дому, в пределах 250 м от
     // воды OSM и на «водной» стороне (направление к ближайшей воде совпадает с направлением от центра комплекса)
-    const water2 = new Uint8Array(water); let lagoonFine: Uint8Array | null = null;
+    const water2 = new Uint8Array(water); let lagoonFine: Uint8Array | null = null; let shoreSd: Float32Array | null = null;
     {
       const dist = new Int32Array(MN * MN).fill(-1); const src = new Int32Array(MN * MN); const q: number[] = [];
       for (let k = 0; k < MN * MN; k++) if (water[k] === 1) { dist[k] = 0; src[k] = k; q.push(k); }
@@ -531,16 +536,27 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         if (shopB) best = Math.min(best, Math.max(0, Math.hypot(x - shopB.pos[0], z - shopB.pos[1]) - 7)); return best; }; // ≥ 10 означает «можно заливать»
       const cx = houses.reduce((a, hh) => a + hh.matrix.elements[12], 0) / Math.max(1, houses.length), cz = houses.reduce((a, hh) => a + hh.matrix.elements[14], 0) / Math.max(1, houses.length);
       // 1) зона, пригодная для заливки (без учёта домов): до воды OSM ≤ 250 м, не дальше 220 м от центра, водная сторона
-      const elig = new Uint8Array(MN * MN);
+      // Края подведённой воды. Раньше её обрезало правило «север и запад не трогаем» (четверть vx ≤ 0, vz ≤ 0): залив к
+      // западу от виллы 1.1 кончался прямой линией 80 м и стоял прямоугольником, к северу от 2.4 был такой же срез, а
+      // вода заходила на дома и дорогу соседней деревни. Теперь сухую сторону задаёт контур из двух плавных кривых:
+      // западная уходит от юго-западного угла участка на запад-юго-запад к берегу OSM (земля к западу от участка —
+      // соседская, сухая), северная — от северной границы у виллы 2.4 на север к берегу OSM
+      const smoothLine = (pts: [number, number][], it = 3) => { let p = pts; for (let n = 0; n < it; n++) { const q: [number, number][] = [p[0]]; for (let i = 0; i < p.length - 1; i++) { const [ax, az] = p[i], [bx, bz] = p[i + 1]; q.push([ax * 0.75 + bx * 0.25, az * 0.75 + bz * 0.25], [ax * 0.25 + bx * 0.75, az * 0.25 + bz * 0.75]); } q.push(p[p.length - 1]); p = q; } return p; };
+      const guideN = smoothLine(SHORE_GUIDE_N), guideW = smoothLine(SHORE_GUIDE_W);
+      const gN0 = guideN[0], gW1 = guideW[guideW.length - 1];
+      const dryPoly: [number, number][] = [[400, gN0[1]], ...guideN, [cx, cz], ...guideW, [gW1[0], 2000], [-2000, 2000], [-2000, -2000], [400, -2000]];
+      const dry = (x: number, z: number) => inPoly(x, z, dryPoly);
+      const elig = new Uint8Array(MN * MN), elig0 = new Uint8Array(MN * MN); // elig0 — без сухого контура (для ровной кромки на мелкой сетке)
       for (let j = 0; j < MN; j++) for (let i = 0; i < MN; i++) {
         const k = j * MN + i; if (water[k] === 1 || dist[k] < 0 || dist[k] * mstep > 250) continue;
         const x = i * mstep - c.dem.half, z = j * mstep - c.dem.half; if (Math.hypot(x - cx, z - cz) > 220) continue;
         const si = src[k] % MN, sj = (src[k] - si) / MN; const wx = si * mstep - c.dem.half - x, wz = sj * mstep - c.dem.half - z; const wl = Math.hypot(wx, wz) || 1;
         const vx = x - cx, vz = z - cz; const vl = Math.hypot(vx, vz) || 1;
-        if (vx <= 0 && vz <= 0) continue; // север и запад (канал, дорога, соседняя земля) не трогаем
-        // водная сторона: направление к ближайшей воде сонаправлено «от центра», либо клетка у самого берега OSM
-        // (до 30 м — там ближайшая вода часто сбоку из-за изгибов берега)
-        if ((wx * vx + wz * vz) / (wl * vl) >= 0.2 || dist[k] <= 6) elig[k] = 1;
+        // внутри участка — только «водная сторона»: направление к ближайшей воде сонаправлено «от центра», либо клетка
+        // у самого берега OSM (до 30 м — там ближайшая вода часто сбоку из-за изгибов берега). Снаружи сторону задаёт
+        // сухой контур: правило направлений давало там «пальцы» по 5 м
+        if (inPoly(x, z, c.site.boundary) && !((wx * vx + wz * vz) / (wl * vl) >= 0.2 || dist[k] <= 6)) continue;
+        elig0[k] = 1; if (!dry(x, z)) elig[k] = 1;
       }
       // 2) только связанная с лагуной часть зоны (без отдельных прудов)
       const seen = new Uint8Array(MN * MN); const q2: number[] = [];
@@ -557,7 +573,29 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       for (let j = 0; j < S.nz; j++) for (let i = 0; i < S.nx; i++) {
         const x = S.x0 + i * S.step, z = S.z0 + j * S.step;
         const ci = Math.round((x + c.dem.half) / mstep), cj = Math.round((z + c.dem.half) / mstep); if (ci < 0 || cj < 0 || ci >= MN || cj >= MN) continue;
-        const k = cj * MN + ci; if (water[k] === 1 || (seen[k] && dHouse(x, z) >= 10)) lagoonFine[j * S.nx + i] = 1;
+        // кромка у сухого контура считается в каждой клетке 0,5 м (грубая клетка 5 м — только связность с лагуной)
+        const k = cj * MN + ci; const linked = seen[k] || (elig0[k] && (seen[k - 1] || seen[k + 1] || seen[k - MN] || seen[k + MN]));
+        if (water[k] === 1 || (linked && !dry(x, z) && dHouse(x, z) >= 10)) lagoonFine[j * S.nx + i] = 1;
+      }
+      // Знаковое расстояние до берега на грубой маске (м, суша +): по нему сетка окрестностей (шаг 10 м) ставит урез
+      // воды на линию берега, а не «где придётся между вершинами». Точное евклидово расстояние (Фельценсвальб) до воды
+      // и до суши, затем два прохода размытия 1-2-1 — ступеньки маски 5 м сглаживаются
+      {
+        const n = MN, INF = 1e12; const f = new Float64Array(n), vv = new Int32Array(n), zz = new Float64Array(n + 1), o = new Float64Array(n);
+        const line = (d: Float64Array, off: number, stride: number) => {
+          for (let q = 0; q < n; q++) f[q] = d[off + q * stride];
+          let kk = 0; vv[0] = 0; zz[0] = -INF; zz[1] = INF;
+          for (let q = 1; q < n; q++) { let s = 0; for (;;) { const p = vv[kk]; s = (f[q] + q * q - (f[p] + p * p)) / (2 * q - 2 * p); if (s <= zz[kk] && kk > 0) kk--; else break; } kk++; vv[kk] = q; zz[kk] = s; zz[kk + 1] = INF; }
+          kk = 0; for (let q = 0; q < n; q++) { while (zz[kk + 1] < q) kk++; const p = vv[kk]; o[q] = (q - p) * (q - p) + f[p]; }
+          for (let q = 0; q < n; q++) d[off + q * stride] = o[q];
+        };
+        const edt = (val: number) => { const d = new Float64Array(n * n); for (let k = 0; k < n * n; k++) d[k] = water2[k] === val ? 0 : INF; for (let j = 0; j < n; j++) line(d, j * n, 1); for (let i = 0; i < n; i++) line(d, i, n); return d; };
+        const dW = edt(1), dL = edt(0); let sd = new Float32Array(n * n);
+        for (let k = 0; k < n * n; k++) sd[k] = Math.max(-80, Math.min(80, (water2[k] === 1 ? -(Math.sqrt(dL[k]) - 0.5) : Math.sqrt(dW[k]) - 0.5) * mstep));
+        for (let pass = 0; pass < 2; pass++) { const b = new Float32Array(n * n);
+          for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; b[k] = (sd[k - (i > 0 ? 1 : 0)] + 2 * sd[k] + sd[k + (i < n - 1 ? 1 : 0)]) / 4; }
+          for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const k = j * n + i; sd[k] = (b[k - (j > 0 ? n : 0)] + 2 * b[k] + b[k + (j < n - 1 ? n : 0)]) / 4; } }
+        shoreSd = sd;
       }
     }
     const waterAt = (x: number, z: number) => {
@@ -567,6 +605,12 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       return i < 0 || j < 0 || i >= MN || j >= MN ? true : water2[j * MN + i] === 1;
     };
     const W = c.water_level;
+    // берег окрестностей: расстояние до уреза (м, суша +) и профиль — от уреза земля поднимается 0,35 м на метр до
+    // своей высоты, дно так же уходит на 3 м. На вершинах сетки 10 м это линейное поле, так что урез ложится на линию
+    // берега, а не ломается по клеткам; раньше суша стояла на высоте SRTM до самой воды и берег шёл призмами
+    const sdAt = (x: number, z: number) => { if (!shoreSd) return waterAt(x, z) ? -20 : 20; const fx = Math.max(0, Math.min(MN - 1.001, (x + c.dem.half) / mstep)), fz = Math.max(0, Math.min(MN - 1.001, (z + c.dem.half) / mstep)); const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j, k = j * MN + i;
+      return (shoreSd[k] * (1 - u) + shoreSd[k + 1] * u) * (1 - v) + (shoreSd[k + MN] * (1 - u) + shoreSd[k + MN + 1] * u) * v; };
+    const shoreY = (x: number, z: number) => W + 0.12 + sdAt(x, z) * SHORE_SLOPE;
     const h = Float32Array.from(site);
     let gradeFixed: Uint8Array | null = null; let inHouseMask: Uint8Array | null = null;
     const { x0, z0, step, nx, nz } = c.site;
@@ -806,7 +850,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         if (gradeFixed && gradeFixed[k]) { relaxFixed[k] = 1; continue; }
         if (inPoly(x, z, B)) { if (wet) { h[k] = bed; if (shallow) shore[k] = 1; else relaxFixed[k] = 1; } continue; }
         if (wet) { h[k] = bed; if (!shallow || distToBoundary(x, z) > 8) relaxFixed[k] = 1; else shore[k] = 1; continue; }
-        h[k] = Math.min(h[k], demLand(x, z)); if (distToBoundary(x, z) > 30) relaxFixed[k] = 1;
+        // суша за границей участка: рельеф SRTM, у воды — тот же профиль берега, что в окрестностях (иначе крайний ряд
+        // сетки, который мембрана не трогает, стоял у воды обрывом на высоте SRTM)
+        h[k] = Math.min(h[k], demLand(x, z), Math.max(W + 0.05, shoreY(x, z))); if (distToBoundary(x, z) > 30) relaxFixed[k] = 1;
       }
       // гладкая поверхность между зафиксированными клетками (Гаусс–Зейдель с верхней релаксацией): площадки домов,
       // вода и дальние окрестности держат форму, газон между ними — плавный, без уступов и обрывов
@@ -932,10 +978,13 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // (площадка магазина, выравнивание под дорожки): просто «на 0,35 м ниже своей высоты» оказывалось выше участка,
       // и трава окрестностей накрывала парковку у ворот
       const ringY = (px: number, pz: number, r0: number) => { let m = Infinity; for (const dx of [-10, -5, 0, 5, 10]) for (const dz of [-10, -5, 0, 5, 10]) { const sy = siteAt(px + dx, pz + dz); if (sy !== null && sy < m) m = sy; } return m === Infinity ? r0 : Math.min(r0, m - 0.35); };
-      if (inG(x, z)) y = isWater(x, z, raw) || (inG(x - st, z) && inG(x + st, z) && inG(x, z - st) && inG(x, z + st) && inG(x - st, z - st) && inG(x + st, z + st) && inG(x - st, z + st) && inG(x + st, z - st)) ? Math.min(y, W - 3) : ringY(x, z, raw);
-      else if (isWater(x, z, raw)) y = Math.min(y, W - 3); // вода вне сетки участка — глубоко (сквозь непрозрачную воду дна не видно)
+      // кромка на суше не тонет: рядом с берегом минимум по соседним клеткам участка попадал на дно, вершина уходила под
+      // воду, и за краем сетки участка вдоль него стоял клин воды. Держим её не ниже 0,3 м над водой (и под участком)
+      const ringLand = (px: number, pz: number, r0: number) => { const r = ringY(px, pz, r0); if (r >= W + 0.3 || waterAt(px, pz)) return r; const sy = siteAt(px, pz); return sy === null ? r : Math.max(r, Math.min(sy - 0.35, W + 0.3)); };
+      if (inG(x, z)) y = isWater(x, z, raw) || (inG(x - st, z) && inG(x + st, z) && inG(x, z - st) && inG(x, z + st) && inG(x - st, z - st) && inG(x + st, z + st) && inG(x - st, z + st) && inG(x + st, z - st)) ? Math.min(y, W - 3) : ringLand(x, z, raw);
+      else y = Math.min(y, Math.max(W - 3, shoreY(x, z))); // вне сетки участка: профиль берега по расстоянию до уреза, вода — до 3 м глубины (сквозь непрозрачную воду дна не видно)
       dp.set([x, y, z], k * 3); du.set([x / 12, z / 12], k * 2);
-      const lc = coverAt(x, z); const cc = y < W + 1.5 ? shore : (lc === 2 ? openCol : landCol); dcol.set([cc.r, cc.g, cc.b], k * 3);
+      const lc = coverAt(x, z); const cc = shore.clone().lerp(lc === 2 ? openCol : landCol, Math.max(0, Math.min(1, (y - (W + 0.5)) / 1.5))); dcol.set([cc.r, cc.g, cc.b], k * 3); // песок у воды плавно переходит в траву
     }
     const didx: number[] = [];
     for (let j = 0; j < N - 1; j++) for (let i = 0; i < N - 1; i++) { const a = j * N + i; didx.push(a, a + N, a + 1, a + 1, a + N, a + N + 1); }
@@ -946,7 +995,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       if (s !== null) return s;
       const raw = demAt(x, z); if (isWater(x, z, raw)) return null;
       if (inGrid(x, z, 0)) { const g = siteAt(x, z); if (g !== null) return g; } // суша в сетке участка вне его границы (берег)
-      return raw;
+      return Math.min(raw, Math.max(W + 0.05, shoreY(x, z))); // у воды — тот же профиль берега, что у нарисованной сетки
     };
     // въезд: парковка, подъездная дорога, ограда и ворота. За границей участка рисуется сетка окрестностей с шагом 10 м
     // (треугольники), а heightAt отдаёт билинейную высоту мелкой сетки — они расходятся на дециметры; ленты кладём
