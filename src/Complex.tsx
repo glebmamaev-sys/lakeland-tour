@@ -96,7 +96,7 @@ const placePalmShort = (p: Plant) => ({ x: p.x, y: p.y + 0.2, z: p.z, yaw: p.r *
 const placeBush = (p: Plant) => ({ x: p.x, y: p.y + 0.1, z: p.z, yaw: p.r * 6.28, height: 0.7 + p.s * 0.9 });
 const placeTree = (p: Plant) => ({ x: p.x, y: p.y + 0.05, z: p.z, yaw: p.r * 6.28, height: 4 + p.s * 2.5 });
 const LAGOON_XZ: [number, number] = [150, 20]; // над чем кружат птицы (лагуна к востоку от участка)
-type BuiltScene = { roads: BufferGeometry | null; windows: BufferGeometry | null; trees: Plant[]; lamps: Lamps | null; entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; arrive: { x: number; z: number; yaw: number } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
+type BuiltScene = { siteSkirt: BufferGeometry | null; roads: BufferGeometry | null; windows: BufferGeometry | null; trees: Plant[]; lamps: Lamps | null; entrance: { paved: BufferGeometry | null; solid: BufferGeometry | null } | null; arrive: { x: number; z: number; yaw: number } | null; site: BufferGeometry; dem: BufferGeometry; houses: BufferGeometry | null; paths: BufferGeometry | null; near: Plant[]; far: Plant[]; shrubs: Plant[]; frangipani: Plant[]; net: PathNet; walls: BufferGeometry | null; steps: BufferGeometry | null; cheeks: BufferGeometry | null; skirt: BufferGeometry | null; lotus: LotusItem[]; bottom: Bottom | null; waterAt: (x: number, z: number) => boolean; stepAt: (x: number, z: number) => number | null; grassOk: (x: number, z: number) => boolean }; // м: дальше этого дом рисуется упрощённой копией
 let artTexture: ReturnType<typeof makeArtTexture> | null = null;
 export const artTex = () => (artTexture ??= makeArtTexture());
 const WALK_LOOK_XZ: [number, number] = [-10, 0];
@@ -799,7 +799,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // берег лагуны не террасируем (естественный уклон к воде, песок, лотосы): клетки ближе 9 м к воде пропускаем —
       // перепад от площадок вилл 1.x к урезу (2,5 м на ~9 м) остаётся пологим газоном без стенок
       const nearWater = (x: number, z: number) => { for (const R of [3, 6, 9]) for (let a = 0; a < 8; a++) if (waterAt(x + Math.cos(a * Math.PI / 4) * R, z + Math.sin(a * Math.PI / 4) * R)) return true; return waterAt(x, z); };
-      const skipT = (x: number, z: number) => !inPoly(x, z, B) || nearWater(x, z) || hiddenW(x, z) || hiddenW(x + 1, z) || hiddenW(x - 1, z) || hiddenW(x, z + 1) || hiddenW(x, z - 1) || (!!shopB && Math.hypot(x - shopB.pos[0], z - shopB.pos[1]) < 10); // пятна домов (+1 м) не террасируем
+      const skipT = (x: number, z: number) => !inPoly(x, z, B) || nearWater(x, z) || hiddenW(x, z) || hiddenW(x + 1, z) || hiddenW(x - 1, z) || hiddenW(x, z + 1) || hiddenW(x, z - 1) || shopHit(x, z) || (!!pose && Math.hypot(x - pose.door[0], z - pose.door[1]) < 4.5); // пятна домов (+1 м), пятно магазина (+0,8 м) и площадку у его двери не террасируем. Раньше исключался круг 10 м вокруг магазина — с нагорной стороны оставался газонный откос 1,3 м на 2 м; теперь там встаёт подпорная стенка, как везде
       terr = planTerraces({ h, x0, z0, step, nx, nz }, relaxFixed, skipT, net, false); // лестницы — у дорожек (PathGrade), стенки у дорожек сходят на нет
       h.set(terr.h); relax(terr.fixed);
       // кромка скрытого пятна дома: клетки под домом, граничащие с улицей, берут уличную отметку — переходные треугольники
@@ -832,6 +832,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const sp = new Float32Array(nx * nz * 3), su = new Float32Array(nx * nz * 2), scol = new Float32Array(nx * nz * 3);
     const green = new Color('#cfdcc0'), sand = new Color('#d8cfb0'), wet = new Color('#a8b894'), worn = new Color('#c9c3a0'), dry = new Color('#d6d6a6');
     const cc = new Color();
+    // за оградой — дикая трава окрестностей (тот же тон, что у дальней сетки), стриженый газон кончается по границе
+    // участка: раньше светлый газон выходил за ограду до края сетки, и стык с тёмной травой шёл по прямоугольнику
+    const wild = new Color('#5f8a46'); const Bs = c.site.boundary;
+    const outDist = (x: number, z: number) => { let best = Infinity; for (let i = 0, j = Bs.length - 1; i < Bs.length; j = i++) { const [ax, az] = Bs[j], [bx, bz] = Bs[i]; const dx = bx - ax, dz = bz - az; const L2 = dx * dx + dz * dz; const t = L2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2)) : 0; const px = ax + t * dx - x, pz = az + t * dz - z; const d2 = px * px + pz * pz; if (d2 < best) best = d2; } return Math.sqrt(best); };
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
       const k = j * nx + i, x = x0 + i * step, z = z0 + j * step, y = h[k];
       const sx = terr ? terr.shift[k * 2] : 0, sz = terr ? terr.shift[k * 2 + 1] : 0; // у подпорных стенок вершины прижаты к граням
@@ -840,6 +844,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       if (y >= W + 0.6) {
         const dp = distToPaths(net, x, z); if (dp < 1.6) cc.lerp(worn, (1 - dp / 1.6) * 0.65);
         const nse = Math.sin(x * 0.11 + 1.3) * Math.sin(z * 0.14 + 0.7) + Math.sin(x * 0.031) * Math.sin(z * 0.027); if (nse > 0.9) cc.lerp(dry, Math.min(1, (nse - 0.9) * 2) * 0.5);
+        if (!inPoly(x, z, Bs)) cc.lerp(wild, Math.min(1, outDist(x, z) / 1.0));
       }
       scol.set([cc.r, cc.g, cc.b], k * 3);
     }
@@ -851,6 +856,17 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     }
     const sg = new BufferGeometry(); sg.setAttribute('position', new BufferAttribute(sp, 3)); sg.setAttribute('uv', new BufferAttribute(su, 2));
     sg.setAttribute('color', new BufferAttribute(scol, 3)); sg.setIndex(sidx); sg.computeVertexNormals();
+    // юбка по краю сетки участка: окрестности под краем лежат на 0,3–0,5 м ниже (см. ringY), без юбки край газона висел бы
+    // в воздухе. Полоса вниз на 1,5 м тем же материалом, под водой не нужна
+    let siteSkirt: BufferGeometry | null = null;
+    { const P: number[] = [], U: number[] = [], Cc: number[] = []; const ring: number[] = [];
+      for (let i = 0; i < nx; i++) ring.push(i); for (let j = 1; j < nz; j++) ring.push(j * nx + nx - 1); for (let i = nx - 2; i >= 0; i--) ring.push((nz - 1) * nx + i); for (let j = nz - 2; j >= 0; j--) ring.push(j * nx);
+      for (let q = 0; q < ring.length - 1; q++) { const a = ring[q], b = ring[q + 1]; if (sp[a * 3 + 1] < W - 0.3 && sp[b * 3 + 1] < W - 0.3) continue;
+        const va = [sp[a * 3], sp[a * 3 + 1], sp[a * 3 + 2]], vb = [sp[b * 3], sp[b * 3 + 1], sp[b * 3 + 2]];
+        P.push(va[0], va[1], va[2], vb[0], vb[1], vb[2], vb[0], vb[1] - 1.5, vb[2], va[0], va[1], va[2], vb[0], vb[1] - 1.5, vb[2], va[0], va[1] - 1.5, va[2]);
+        U.push(su[a * 2], su[a * 2 + 1], su[b * 2], su[b * 2 + 1], su[b * 2], su[b * 2 + 1] + 0.4, su[a * 2], su[a * 2 + 1], su[b * 2], su[b * 2 + 1] + 0.4, su[a * 2], su[a * 2 + 1] + 0.4);
+        for (const v of [a, b, b, a, b, a]) Cc.push(scol[v * 3], scol[v * 3 + 1], scol[v * 3 + 2]); }
+      if (P.length) { siteSkirt = new BufferGeometry(); siteSkirt.setAttribute('position', new Float32BufferAttribute(P, 3)); siteSkirt.setAttribute('uv', new Float32BufferAttribute(U, 2)); siteSkirt.setAttribute('color', new Float32BufferAttribute(Cc, 3)); siteSkirt.computeVertexNormals(); } }
     // окрестности: сетка 20 м в квадрате ±2 км; вода — ниже уровня; внутри участка — под ним
     const LN = c.dem.land_n;
     const demAt = demSampler({ ...c, dem: { ...c.dem, n: LN, step: (2 * c.dem.half) / (LN - 1) } }, land), siteAt = siteSampler(c, h);
@@ -869,11 +885,11 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // треугольник между последней наружной вершиной и первой внутренней нырял: вдоль края сетки шла канава до 10 м
       // шириной, в ней проступала вода. Теперь под воду уходят только вершины в глубине сетки (все соседи тоже внутри),
       // а кольцо у края остаётся на своей высоте, на 0,35 м ниже сетки участка, которая его и накрывает
-      const inG = (px: number, pz: number) => inPoly(px, pz, c.site.boundary) || inGrid(px, pz, 2);
+      const inG = (px: number, pz: number) => inPoly(px, pz, c.site.boundary) || inGrid(px, pz, 0); // без поля: вершина в 2 м от края сетки оставалась на своей высоте и выступала над участком тёмной травой
       // кромка: ниже самой низкой точки сетки участка в соседних ячейках (±10 м). Участок у границы местами подрезан
       // (площадка магазина, выравнивание под дорожки): просто «на 0,35 м ниже своей высоты» оказывалось выше участка,
       // и трава окрестностей накрывала парковку у ворот
-      const ringY = (px: number, pz: number, r0: number) => { let m = r0; for (const dx of [-10, -5, 0, 5, 10]) for (const dz of [-10, -5, 0, 5, 10]) { const sy = siteAt(px + dx, pz + dz); if (sy !== null && sy < m) m = sy; } return m - 0.35; };
+      const ringY = (px: number, pz: number, r0: number) => { let m = Infinity; for (const dx of [-10, -5, 0, 5, 10]) for (const dz of [-10, -5, 0, 5, 10]) { const sy = siteAt(px + dx, pz + dz); if (sy !== null && sy < m) m = sy; } return m === Infinity ? r0 : Math.min(r0, m - 0.35); };
       if (inG(x, z)) y = isWater(x, z, raw) || (inG(x - st, z) && inG(x + st, z) && inG(x, z - st) && inG(x, z + st) && inG(x - st, z - st) && inG(x + st, z + st) && inG(x - st, z + st) && inG(x + st, z - st)) ? Math.min(y, W - 3) : ringY(x, z, raw);
       else if (isWater(x, z, raw)) y = Math.min(y, W - 3); // вода вне сетки участка — глубоко (сквозь непрозрачную воду дна не видно)
       dp.set([x, y, z], k * 3); du.set([x / 12, z / 12], k * 2);
@@ -984,7 +1000,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       return true;
     };
     (window as unknown as { __grassOk: unknown }).__grassOk = grassOk;
-    const builtNow = { roads: roadsB.geom, windows: village.windows, trees, lamps, entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, arrive: entrance?.arrive ?? null, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
+    const builtNow = { siteSkirt, roads: roadsB.geom, windows: village.windows, trees, lamps, entrance: entrance && { paved: entrance.paved, solid: entrance.solid }, arrive: entrance?.arrive ?? null, site: sg, dem: dg, houses: nbHouses, paths, near, far, shrubs, frangipani, net, walls, steps: stairG.treads, cheeks: stairG.cheeks, skirt: skirtGeom, lotus, bottom, waterAt, stepAt, grassOk }; builtCache = { data, built: builtNow, heightAt }; setBuilt(builtNow);
     complexStore.data = c; complexStore.houses = houses; complexStore.heightAt = heightAt;
     (window as unknown as { __complex: unknown }).__complex = { heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
   }, [data, instances, houses]);
@@ -1089,6 +1105,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
   };
   const siteMat = useMemo(() => { const t = grass.clone(); t.wrapS = t.wrapT = RepeatWrapping; t.colorSpace = SRGBColorSpace; t.needsUpdate = true;
     return grassVary(new MeshStandardMaterial({ map: t, vertexColors: true, roughness: 1 }), 0.012, true); }, [grass, data]);
+  const siteSkirtMat = useMemo(() => { const m = siteMat.clone(); m.side = DoubleSide; return m; }, [siteMat]);
   const demMat = useMemo(() => grassVary(new MeshStandardMaterial({ map: siteMat.map, vertexColors: true, roughness: 1 }), 0.006), [siteMat]);
   // окружение: дома деревни (цвет стен и крыш по вершинам), их окна (вечером светятся), асфальт дорог
   const villageMat = useMemo(() => new MeshStandardMaterial({ vertexColors: true, roughness: 0.92, side: DoubleSide }), []);
@@ -1129,6 +1146,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         {built && (
           <>
             <mesh geometry={built.site} material={siteMat} receiveShadow />
+            {built.siteSkirt && <mesh geometry={built.siteSkirt} material={siteSkirtMat} />}
             <mesh geometry={built.dem} material={demMat} receiveShadow />
             {built.houses && <mesh geometry={built.houses} material={villageMat} castShadow receiveShadow />}
             {built.windows && <mesh geometry={built.windows} material={windowMat} />}

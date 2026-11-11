@@ -103,7 +103,7 @@
   "pathLines": 16,
   "flights": 7,
   "steps": 63,
-  "walls": 7,
+  "walls": 8,
   "residents": {
     "walkers": 8,
     "sunbathers": 6,
