@@ -705,7 +705,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       inst.updateMatrixWorld(true);
       const hi = houses.find((x) => x.id === inst.name.slice('house-'.length)); if (!hi) continue;
       const [fx0, fz0, fx1, fz1] = hi.fp; const inFoot = (x: number, z: number) => { lpv.set(x, 0, z); inst.worldToLocal(lpv); return lpv.x > fx0 + 1.2 && lpv.x < fx1 - 1.2 && lpv.z > fz0 + 1.2 && lpv.z < fz1 - 1.2; }; // строго габарит мешей дома: снаружи стен рельеф не трогаем (были «дырки» у входов)
-      const col = buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => m.userData.role === 'water' || m.userData.role === 'ground' || m.userData.role === 'terrain' || m.userData.role === 'glass' || m.userData.role === 'plants'));
+      // Невидимые вспомогательные пандусы (cfg.helpers, userData.helper) плитой не считаются. Они закрывают дыру в рельефе
+      // Revit для прогулки по одной вилле, а здесь из-за них рельеф под ними скрывался: у входа на террасу вилл 1.x в
+      // газоне была дыра, сквозь которую виднелась вода лагуны (замечание заказчика: «дыра на входе, земля торчит»)
+      const col = buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => !!m.userData.helper || m.userData.role === 'water' || m.userData.role === 'ground' || m.userData.role === 'terrain' || m.userData.role === 'glass' || m.userData.role === 'plants'));
       if (!col) continue;
       const planL = data.plans[hi.model]; const minLevel = planL ? Math.min(...planL.levels.map((l) => l.level)) : 0;
       let found = 0, eaves = 0; const mine: number[] = []; const OVERHANG = 3.0; const cp = col.geometry.getAttribute('position') as BufferAttribute; const e1 = new Vector3(), e2 = new Vector3(), nrm = new Vector3(), v0 = new Vector3();
