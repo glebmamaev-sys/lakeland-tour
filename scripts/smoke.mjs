@@ -85,6 +85,7 @@ async function main() {
     const built = stage === 'terrain:done'; const secs = ((Date.now() - t0) / 1000).toFixed(0);
     if (built) await sleep(1500); // дорисовать кадр и собрать поздние ошибки
     const data = built ? await tab.evaluate(COLLECT) : null;
+    const ground = built ? await tab.evaluate(`(async () => { ${await readFile(new URL('./ground-check.js', import.meta.url), 'utf8')} })()`).catch((e) => { console.error('проверка земли не выполнилась:', e.message); return null; }) : null;
     const walk = built ? await tab.evaluate(WALKCHECK).catch(() => null) : null;
 
     // показатели из журнала сцены (последняя запись по каждому ключу: эффекты React в разработке срабатывают дважды)
@@ -130,6 +131,8 @@ async function main() {
       { const fc = data.facade ?? { masks: {}, houses: 0 }; const types = ['villa1', 'villa21', 'villa22', 'villa3']; check(`фасады: маски планов у всех типов вилл (уровней ${types.map((t) => fc.masks?.[t] ?? 0).join(', ')}), домов в шейдере ${fc.houses}`, types.every((t) => (fc.masks?.[t] ?? 0) >= 1) && fc.houses === 11, 'нет маски плана или списка домов: отделка фасада не применится'); }
       check(`прогулка: игрок стоит на парковке, стенка его держит${walk ? ` (над землёй ${walk.stand} м, за стенку ${walk.wall} м)` : ''}`, !!walk && walk.tour && walk.stand !== null && walk.stand > -0.1 && walk.stand < 0.9 && (walk.wall === null || walk.wall < 0.3), walk ? 'игрок провалился, завис или перешёл стенку' : 'режим «Пешком» не включился');
       check(`жители на месте${walk ? ` (гуляют ${walk.walkers}, загорают ${walk.sunbathers}, стоят и сидят ${walk.standing}, садовник ${walk.gardener ? 'есть' : 'нет'})` : ''}`, !!walk && walk.walkers >= 6 && walk.sunbathers >= 3 && walk.gardener && walk.standing >= 5, 'нет гостей, загорающих или садовника');
+      check(`земля без дыр: вода лагуны сквозь участок не видна${ground ? ` (мест ${ground.holes.n}, ${ground.holes.area} м²)` : ''}`, !!ground && ground.holes.area <= 0.5, ground ? ground.holes.top.map((c) => `${c[0]} м² у (${c[1]}, ${c[2]}), вилла ${c[3]}`).join('\n      ') : 'проверка не выполнилась');
+      check(`гости идут по поверхности дорожек${ground && ground.feet.n ? ` (замеров ${ground.feet.n}, глубже всего ${Math.max(0, ground.feet.sink * 100).toFixed(0)} см; лента над землёй до ${(ground.pathFloat * 100).toFixed(0)} см)` : ''}`, !!ground && ground.feet.n > 0 && ground.feet.sink <= 0.05 && ground.pathFloat !== null && ground.pathFloat <= 0.25, ground ? `замеров ${ground.feet.n}, провал ${ground.feet.sink} м, лента над землёй ${ground.pathFloat} м` : 'проверка не выполнилась');
       check('нет комнат-дублей (одна комната не обставлена дважды)', (data.dup ?? []).length === 0, (data.dup ?? []).join('\n      '));
       check(`оси дорожек не идут через дома и бассейны (${data.path?.pts ?? 0} точек)`, !!data.path && data.path.inHouse === 0 && data.path.inPool === 0, data.path ? `в домах ${data.path.inHouse}, в бассейнах ${data.path.inPool}` : 'нет данных');
       if (baseline && !UPDATE) {
