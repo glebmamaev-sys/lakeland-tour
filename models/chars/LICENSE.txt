@@ -1,0 +1,4 @@
+Персонажи: Quaternius — «Ultimate Modular Men Pack» (февраль 2022) и «Ultimate Modular Women Pack» (апрель 2022).
+Лицензия CC0 1.0 (public domain), заявлена автором на страницах паков (quaternius.com/packs/ultimatemodularcharacters.html,
+quaternius.com/packs/ultimatemodularwomen.html) и в постах Patreon/Reddit. Скачаны 06.11.2026 из публичных папок Google Drive автора.
+Здесь — glTF «Individual Characters», оставлены клипы Idle, Idle_Neutral, Walk, Run, Wave, Interact; сжаты gltf-transform (prune, resample, meshopt).

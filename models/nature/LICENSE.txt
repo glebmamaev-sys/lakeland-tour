@@ -1,0 +1,3 @@
+Растения: Quaternius «Ultimate Stylized Nature Pack» (май 2022; quaternius.com/packs/ultimatestylizednature.html), лицензия CC0 1.0 (License.txt пака,
+заголовок в нём по ошибке автора говорит «Ultimate Platformer Pack»). Скачано 08.11.2026 из публичной папки Google Drive автора (OBJ + текстуры), сконвертировано
+obj2gltf, текстуры ужаты до 1024/512 px и WebP (q80), геометрия meshopt. Файлы q_*.glb.
