@@ -13,7 +13,9 @@ export type Graded = { fixed: Uint8Array; h: Float32Array; steps: Step[]; flight
 
 const DS = 0.5, SLOPE_WALK = 0.12, SLOPE_MAX = 0.5, RISER = 0.15, HALF = 1.5, LIFT = -0.06, SMOOTH = 1.5, NODE = 0.6, SLOPE_STAIR = 0.5;
 
-export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6): Graded {
+/** padAt — отметка мощения модели дома под точкой (или null): конец дорожки, пришедший на такое мощение, встаёт на его
+ *  уровень, а не на рельеф под ним (рельеф участка местами ниже рельефа Revit на 0,3–0,9 м). */
+export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6, padAt?: (x: number, z: number) => number | null): Graded {
   const { h, x0, z0, step, nx, nz } = g; const N = nx * nz;
   const sample = (x: number, z: number) => {
     const fx = Math.max(0, Math.min(nx - 1.001, (x - x0) / step)), fz = Math.max(0, Math.min(nz - 1.001, (z - z0) / step));
@@ -45,13 +47,21 @@ export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6
   const shape = lines.map((l) => { if (l.length < 2) return null; const curve = new CatmullRomCurve3(l, false, 'centripetal'); const L = curve.getLength(); const n = Math.max(2, Math.ceil(L / (L < 6 ? DS / 2 : DS))); return { curve, L, n, ds: L / n, pts: curve.getSpacedPoints(n) }; }); // короткие ответвления — с шагом 0,25 м: площадка у стыка и лестница на 2–3 м должны уложиться точно
   const nodeH: { x: number; z: number; y: number }[] = [];
   const nodeAt = (x: number, z: number) => nodeH.find((q) => Math.hypot(q.x - x, q.z - z) < NODE);
+  // концы на мощении модели: отметка конца — уровень мощения (лента вровень с ним). Короткое ответвление от стыка к
+  // такому мощению (2,4 м к плиточной дорожке виллы 1.x) должно уложить лестницу за площадкой стыка: если перепад
+  // для этого велик, отметка самого стыка подтягивается к мощению — и главная дорожка проходит стык на этой отметке
+  const isJ = (li0: number, x: number, z: number) => shape.some((o, oi) => o && oi !== li0 && o.pts.some((q) => Math.hypot(q.x - x, q.z - z) < NODE));
+  const padEnd: (number | null)[][] = shape.map((sh, li0) => { if (!sh) return [null, null]; return [0, sh.n].map((e) => { const p = sh.pts[e]; if (!padAt || isJ(li0, p.x, p.z)) return null; const y = padAt(p.x, p.z); return y !== null && Math.abs(y - sample(p.x, p.z)) < 1.2 ? y - 0.13 : null; }); });
+  shape.forEach((sh, li0) => { if (!sh || sh.L >= 6) return; for (const [je, pe] of [[0, 1], [1, 0]]) { const py = padEnd[li0][pe]; if (py === null) continue; const p = sh.pts[je ? sh.n : 0]; if (!isJ(li0, p.x, p.z)) continue;
+    const a = SLOPE_MAX * Math.max(0, sh.L - KEEP), t0 = nodeAt(p.x, p.z)?.y ?? sample(p.x, p.z), y = Math.max(py - a, Math.min(py + a, t0)); if (Math.abs(y - t0) < 0.01) continue;
+    const had = nodeAt(p.x, p.z); if (had) had.y = y; else nodeH.push({ x: p.x, z: p.z, y }); } });
   let li = -1;
   for (const sh of shape) {
     li++; if (!sh) continue;
     const lift = 0.1 + (li % 8) * 0.004; // ленты пересекающихся дорожек — на разной высоте (±3 см), иначе на стыках z-fighting
     const { curve, L, n, ds, pts } = sh; const t = pts.map((p) => sample(p.x, p.z));
     const w = Math.round(SMOOTH / ds); const gp = t.map((_, i) => { let a = 0, c = 0; for (let k = -w; k <= w; k++) { const j = i + k; if (j >= 0 && j <= n) { a += t[j]; c++; } } return a / c; });
-    gp[0] = t[0]; gp[n] = t[n]; // концы — на отметках площадок/дорог, куда дорожка приходит
+    gp[0] = padEnd[li][0] ?? t[0]; gp[n] = padEnd[li][1] ?? t[n]; // концы — на отметках площадок/дорог, куда дорожка приходит
     const pin = new Uint8Array(n + 1); pin[0] = pin[n] = 1;
     { const land: { i: number; y: number; k: number }[] = [];
       const tan = (o: NonNullable<typeof sh>, i: number): [number, number] => { const a = o.pts[Math.max(0, i - 1)], b = o.pts[Math.min(o.n, i + 1)]; const d = Math.hypot(b.x - a.x, b.z - a.z) || 1; return [(b.x - a.x) / d, (b.z - a.z) / d]; };
@@ -109,16 +119,19 @@ export function gradePaths(net: PathNet, g: Grid, fixed: Uint8Array, width = 2.6
       }
       const rg = new BufferGeometry(); rg.setAttribute('position', new Float32BufferAttribute(P, 3)); rg.setAttribute('uv', new Float32BufferAttribute(U, 2)); rg.setAttribute('normal', new Float32BufferAttribute(Nn, 3)); rg.setIndex(idx); ribbons.push(rg); }
     // коридор: каждой клетке — отметка ближайшей точки оси
-    const R = HALF + 0.35;
+    // Внутри одной дорожки клетка берёт отметку именно ближайшей точки оси. Раньше бралась самая низкая из точек в
+    // радиусе 1,85 м: под маршем земля ложилась на уровень его низа, и мощение дома у верха ответвления висело над ней.
+    const R = HALF + 0.35; const own = new Map<number, [number, number]>();
     for (let s = 0; s <= n; s++) {
       const p = pts[s];
       const i0 = Math.max(0, Math.floor((p.x - R - x0) / step)), i1 = Math.min(nx - 1, Math.ceil((p.x + R - x0) / step));
       const j0 = Math.max(0, Math.floor((p.z - R - z0) / step)), j1 = Math.min(nz - 1, Math.ceil((p.z + R - z0) / step));
       for (let j = j0; j <= j1; j++) for (let ii = i0; ii <= i1; ii++) {
         const k = j * nx + ii; const d = Math.hypot(x0 + ii * step - p.x, z0 + j * step - p.z);
-        if (d <= R) { const v = gp[s] + LIFT; if (best[k] === Infinity) ht[k] = v; else ht[k] = Math.min(ht[k], v); best[k] = Math.min(best[k], d); } // на пересечениях — ниже из двух: обе ленты над землёй
+        if (d <= R) { const e = own.get(k); if (!e || d < e[0]) own.set(k, [d, gp[s] + LIFT]); }
       }
     }
+    for (const [k, [d, v]] of own) { if (best[k] === Infinity) ht[k] = v; else ht[k] = Math.min(ht[k], v); best[k] = Math.min(best[k], d); } // на пересечениях дорожек — ниже из двух: обе ленты над землёй
   }
   // зафиксированные клетки (площадки у двери магазина, кромки площадок домов) коридор тоже срезает, если они выше профиля —
   // иначе газон торчит сквозь ленту; ниже профиля — оставляем (лента их накрывает)

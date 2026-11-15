@@ -118,6 +118,45 @@ type Placement = { id: string; model: string; floor: number; rot: number; pos: [
  *  виллы 1.1 выходили за границу участка на 1,1 м, а сдвинуть её одну нельзя — до 1.2 остаётся 0,4 м. После сдвига
  *  плиты 1.1 в 1,9 м внутри границы, от 1.5 до плит виллы 3 — 7,6 м. Дорожки, берег и посадки пересчитываются сами. */
 const ROW1_SHIFT = 3;
+/** Рельеф Revit из модели дома (скрытая сетка земли, role 'ground'): коллайдер для сравнения с ним мощения. */
+function revitGroundCollider(inst: Object3D): Collider | null {
+  const off: Mesh[] = []; inst.traverse((o) => { const m = o as Mesh; if (m.isMesh && m.userData.role === 'ground' && m.userData.noCollide) { m.userData.noCollide = false; off.push(m); } });
+  const col = buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => m.userData.role !== 'ground'));
+  for (const m of off) m.userData.noCollide = true; return col;
+}
+/** Срезает куски мощения Revit, повисшие над нашим рельефом (выше T и ниже 2 м). Рельеф участка местами ниже рельефа
+ *  Revit, а дорожки врезаны ещё глубже: треугольный конец плиточной дорожки виллы 1.x висел над тропинкой на 0,3–1,4 м
+ *  (замечание заказчика: «дыры в фундаменте»). Большие треугольники дробятся до 0,15 м, чтобы срез шёл по линии рельефа без крупных зубцов. */
+function cutHangingPaving(inst: Object3D, ground: (x: number, z: number) => number | null, revit: Collider, T = 0.25): number {
+  let cut = 0; const w = new Vector3(), ray = new Ray(new Vector3(), new Vector3(0, -1, 0)); inst.updateMatrixWorld(true);
+  inst.traverse((o) => {
+    const m = o as Mesh; if (!m.isMesh || m.userData.hangCut || m.userData.role !== 'paving' || Array.isArray(m.material)) return;
+    const g = m.geometry; const names = Object.keys(g.attributes); if (!names.includes('position')) return; names.sort((a, b) => (a === 'position' ? -1 : b === 'position' ? 1 : 0));
+    const attrs = names.map((n) => g.attributes[n] as BufferAttribute), sizes = attrs.map((a) => a.itemSize), S = sizes.reduce((a, b) => a + b, 0);
+    const read = (i: number) => { const v = new Float32Array(S); let o2 = 0; for (let k = 0; k < attrs.length; k++) { for (let c = 0; c < sizes[k]; c++) v[o2 + c] = attrs[k].getComponent(i, c); o2 += sizes[k]; } return v; };
+    const mid = (a: Float32Array, b: Float32Array) => { const v = new Float32Array(S); for (let k = 0; k < S; k++) v[k] = (a[k] + b[k]) / 2; return v; };
+    // режется только мощение, лежащее на рельефе Revit (подобласть рельефа, тонкая поверхность): настилы, пандусы и
+    // стенки того же материала стоят выше или ниже него и не трогаются
+    const hang = (v: Float32Array) => { w.set(v[0], v[1], v[2]).applyMatrix4(m.matrixWorld); const y = ground(w.x, w.z); if (y === null) return false; const d = w.y - y; if (!(d > T && d < 2)) return false;
+      ray.origin.set(w.x, w.y + 0.5, w.z); const hit = revit.bvh.raycastFirst(ray, DoubleSide); return !!hit && Math.abs(hit.point.y - w.y) < 0.1; };
+    const len = (a: Float32Array, b: Float32Array) => { w.set(a[0] - b[0], a[1] - b[1], a[2] - b[2]).transformDirection(m.matrixWorld); const sx = Math.hypot(m.matrixWorld.elements[0], m.matrixWorld.elements[1], m.matrixWorld.elements[2]); return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) * sx; };
+    const out: Float32Array[] = []; let dropped = 0;
+    const emit = (a: Float32Array, b: Float32Array, c: Float32Array, depth: number) => {
+      const ab = mid(a, b), bc = mid(b, c), ca = mid(c, a), ce = new Float32Array(S); for (let k = 0; k < S; k++) ce[k] = (a[k] + b[k] + c[k]) / 3;
+      const hs = [a, b, c, ab, bc, ca, ce].map(hang); if (!hs.some(Boolean)) { out.push(a, b, c); return; }
+      const la = len(a, b), lb = len(b, c), lc = len(c, a), lm = Math.max(la, lb, lc);
+      if (lm <= 0.15 || depth >= 16) { if (hs[6] || hs.filter(Boolean).length >= 4) dropped++; else out.push(a, b, c); return; }
+      if (lm === la) { emit(a, ab, c, depth + 1); emit(ab, b, c, depth + 1); } else if (lm === lb) { emit(a, b, bc, depth + 1); emit(a, bc, c, depth + 1); } else { emit(a, b, ca, depth + 1); emit(ca, b, c, depth + 1); }
+    };
+    const idx = g.index; const nT = (idx ? idx.count : attrs[0].count) / 3;
+    for (let t = 0; t < nT; t++) { const i0 = idx ? idx.getX(t * 3) : t * 3, i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2; emit(read(i0), read(i1), read(i2), 0); }
+    m.userData.hangCut = true; if (!dropped) return;
+    const ng = new BufferGeometry(); let o2 = 0;
+    for (let k = 0; k < attrs.length; k++) { const arr = new Float32Array(out.length * sizes[k]); for (let i = 0; i < out.length; i++) for (let c = 0; c < sizes[k]; c++) arr[i * sizes[k] + c] = out[i][o2 + c]; ng.setAttribute(names[k], new BufferAttribute(arr, sizes[k])); o2 += sizes[k]; }
+    ng.computeBoundingBox(); ng.computeBoundingSphere(); m.geometry = ng; cut += dropped;
+  });
+  return cut;
+}
 function shiftRow1(c: ComplexData) {
   for (const b of c.buildings) { const bb = b as Placement & { shifted?: boolean; footprint_center?: [number, number] }; if (!/^1\./.test(b.id) || bb.shifted) continue;
     b.pos = [b.pos[0] + ROW1_SHIFT, b.pos[1]]; if (bb.footprint_center) bb.footprint_center = [bb.footprint_center[0] + ROW1_SHIFT, bb.footprint_center[1]]; bb.shifted = true; }
@@ -701,7 +740,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     // рельеф под домом НЕ режем: внутри пятна дома он не рисуется и не участвует в коллайдере (маска ниже); здесь только
     // запоминаем отметку верха плит (slabTop) — для цоколей/подпорных граней по границе пятна
     const lpv = new Vector3(); const footMask = new Uint8Array(nx * nz), slabTop = new Float32Array(nx * nz).fill(NaN);
-    const coverCols: { col: Collider; water: Collider | null; bb: Box3 }[] = []; // коллайдеры домов для проверки «землю что-то накрывает» (ниже, после маски скрытого рельефа)
+    const coverCols: { col: Collider; water: Collider | null; pave: Collider | null; gnd: Collider | null; inst: Object3D; bb: Box3 }[] = []; const revitGround = new Map<Object3D, Collider>(); // коллайдеры домов для проверки «землю что-то накрывает» (ниже, после маски скрытого рельефа)
     for (const inst of instances) {
       inst.updateMatrixWorld(true);
       const hi = houses.find((x) => x.id === inst.name.slice('house-'.length)); if (!hi) continue;
@@ -745,7 +784,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           const lift = comp.map((k) => slabTop[k] - h[k]).sort((p, q) => p - q)[comp.length >> 1];
           if (lift > 1.2) { for (const k of comp) { footMask[k] = 0; slabTop[k] = NaN; } eaves += comp.length; found -= comp.length; } } }
       console.info('[floors]', hi.id, 'плит/полов под пятном:', found, 'клеток; свесов без пола:', eaves);
-      coverCols.push({ col, water: buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => m.userData.role !== 'water')), bb: bb.clone() });
+      // мощение участка из Revit — подобласть его рельефа: тонкая поверхность по рельефу Revit. Его отметки нужны дорожкам
+      // (PathGrade, padAt), а куски, повисшие над нашим рельефом, срезаются ниже (cutHangingPaving)
+      const paveParts = collectColliderParts(inst, [], undefined, (m) => m.userData.role !== 'paving'); const gnd = revitGroundCollider(inst); if (gnd) revitGround.set(inst, gnd);
+      coverCols.push({ col, water: buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => m.userData.role !== 'water')), pave: paveParts.length ? buildColliderFromParts(paveParts) : null, gnd, inst, bb: bb.clone() });
     }
     // интерьер по планам: мировая маска 0,1 м (стены + комнаты до наружной грани); в глубине ≥ 0,5 м от грани
     // земля на 5 см ниже пола этого места, у грани остаётся отметка площадки — рельеф внутри маски не рисуется
@@ -779,8 +821,11 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     // Стекло и посадки не считаются. Проверка лучом в центре блока 0,2 м; открытые блоки расширяются на один блок,
     // чтобы тонкие перила и бортики над дырой не оставляли под собой полоску
     const openedCell = new Uint8Array(nx * nz); // клетки участка внутри пятна дома, где рельеф открыт (дворики, приямки): в замер посадки не входят
-    { const BL = 2, bw = Math.ceil(wnx / BL), bh = Math.ceil(wnz / BL); const open = new Uint8Array(bw * bh); const ray = new Ray(new Vector3(), new Vector3(0, -1, 0)); let opened = 0;
-      for (const { col, water: wc, bb } of coverCols) {
+    const UB = 2, ubw = Math.ceil(wnx / UB), ubh = Math.ceil(wnz / UB); const underMap = new Float32Array(ubw * ubh).fill(NaN), thickMap = new Float32Array(ubw * ubh), paveMap = new Float32Array(ubw * ubh).fill(NaN); // блоки 0,2 м; thickMap — высота детали над её нижней кромкой (стена ≥ 0,45 м, мебель и плиты тоньше)
+    const paveAt = (x: number, z: number): number | null => { let best: number | null = null; const bi = Math.round((x - x0) / WX / UB - 0.5 + 0.25), bj = Math.round((z - z0) / WX / UB - 0.5 + 0.25); for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const i = bi + di, j = bj + dj; if (i < 0 || j < 0 || i >= ubw || j >= ubh) continue; const y = paveMap[j * ubw + i]; if (!Number.isNaN(y) && (best === null || y > best)) best = y; } return best; };
+    (window as unknown as { __under: unknown }).__under = { bw: ubw, bh: ubh, size: UB * WX, map: underMap, pave: paveMap, thick: thickMap };
+    { const BL = UB, bw = ubw, bh = ubh; const open = new Uint8Array(bw * bh); const ray = new Ray(new Vector3(), new Vector3(0, -1, 0)), up = new Ray(new Vector3(), new Vector3(0, 1, 0)); let opened = 0;
+      for (const { col, water: wc, pave, gnd, bb } of coverCols) {
         const bi0 = Math.max(0, Math.floor((bb.min.x - x0) / WX / BL)), bi1 = Math.min(bw - 1, Math.ceil((bb.max.x - x0) / WX / BL)), bj0 = Math.max(0, Math.floor((bb.min.z - z0) / WX / BL)), bj1 = Math.min(bh - 1, Math.ceil((bb.max.z - z0) / WX / BL));
         for (let bj = bj0; bj <= bj1; bj++) for (let bi = bi0; bi <= bi1; bi++) {
           let any = false; for (let dj = 0; dj < BL && !any; dj++) for (let di = 0; di < BL; di++) { const i = bi * BL + di, j = bj * BL + dj; if (i < wnx && j < wnz && whide[j * wnx + i]) { any = true; break; } }
@@ -789,7 +834,13 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           if (col.bvh.raycastFirst(ray, DoubleSide) || (wc && wc.bvh.raycastFirst(ray, DoubleSide))) continue;
           open[bj * bw + bi] = 1;
         }
-        col.geometry.dispose(); wc?.geometry.dispose();
+        // нижняя кромка модели над каждым блоком (луч снизу вверх): по ней ниже закрываются зазоры под висящими стенками
+        for (let bj = bj0; bj <= bj1; bj++) for (let bi = bi0; bi <= bi1; bi++) {
+          up.origin.set(x0 + (bi * BL + BL / 2 - 0.5) * WX, -40, z0 + (bj * BL + BL / 2 - 0.5) * WX); const hit = col.bvh.raycastFirst(up, DoubleSide);
+          if (hit && !(underMap[bj * bw + bi] <= hit.point.y)) { underMap[bj * bw + bi] = hit.point.y; const y0 = hit.point.y; up.origin.y = y0 + 0.02; const h2 = col.bvh.raycastFirst(up, DoubleSide); thickMap[bj * bw + bi] = h2 ? h2.point.y - y0 : 0; }
+          if (pave && gnd) { ray.origin.set(up.origin.x, 80, up.origin.z); const gh = gnd.bvh.raycastFirst(ray, DoubleSide); if (gh) { ray.origin.y = gh.point.y + 0.3; const ph = pave.bvh.raycastFirst(ray, DoubleSide); if (ph && Math.abs(ph.point.y - gh.point.y) < 0.1) paveMap[bj * bw + bi] = ph.point.y; } }
+        }
+        col.geometry.dispose(); wc?.geometry.dispose(); pave?.geometry.dispose();
       }
       for (let bj = 0; bj < bh; bj++) for (let bi = 0; bi < bw; bi++) { if (!open[bj * bw + bi]) continue; opened++;
         { const ci = Math.round((bi * BL + BL / 2 - 0.5) * WX / step), cj = Math.round((bj * BL + BL / 2 - 0.5) * WX / step); if (ci >= 0 && cj >= 0 && ci < nx && cj < nz) openedCell[cj * nx + ci] = 1; }
@@ -898,10 +949,30 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           if (maxd < 0.002) break;
         }
       };
+      // земля под мощением Revit встаёт на его уровень (на 5 см ниже): наш рельеф местами ниже рельефа Revit на 0,3–0,9 м,
+      // и плиточные дорожки вилл 1.x висели над газоном. Клетка поднимается, если мощение занимает хотя бы четверть её
+      // площади; дальше коридор дорожек срезает эти клетки там, где проходит тропинка (PathGrade), а мощение над ней режется
+      { let seated = 0; const R = Math.max(1, Math.round(step / 2 / (UB * WX)));
+        for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+          const k = j * nx + i, x = x0 + i * step, z = z0 + j * step; if (shore[k] || hiddenW(x, z) || !inPoly(x, z, B)) continue;
+          const bi = Math.round((x - x0) / WX / UB - 0.25), bj = Math.round((z - z0) / WX / UB - 0.25); let sum = 0, cnt = 0, all = 0;
+          for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) { const a = bi + di, b2 = bj + dj; if (a < 0 || b2 < 0 || a >= ubw || b2 >= ubh) continue; all++; const y = paveMap[b2 * ubw + a]; if (!Number.isNaN(y)) { sum += y; cnt++; } }
+          if (cnt * 4 < all) continue; const y = sum / cnt - 0.05; if (Math.abs(y - h[k]) < 0.03 || Math.abs(y - h[k]) > 1.2) continue;
+          h[k] = y; relaxFixed[k] = 1; seated++; }
+        // то же под стенами, подрезанными снизу по рельефу Revit: где нижняя кромка стены (деталь выше 0,45 м) висит над
+        // нашим газоном на 4–80 см, клетка поднимается до кромки + 3 см, и стена уходит в землю
+        let walls = 0; const RW = R + 2; /* стена в 0,6 м от центра клетки тоже поднимает её: газон у стены задают соседние клетки */ const noWallSeat = /nowallseat/.test(window.location.search); // для снимков «до» (отладка)
+        for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+          const k = j * nx + i, x = x0 + i * step, z = z0 + j * step; if (shore[k] || hiddenW(x, z) || !inPoly(x, z, B)) continue;
+          const bi = Math.round((x - x0) / WX / UB - 0.25), bj = Math.round((z - z0) / WX / UB - 0.25); let top = -Infinity;
+          for (let dj = -RW; dj <= RW; dj++) for (let di = -RW; di <= RW; di++) { const a = bi + di, b2 = bj + dj; if (a < 0 || b2 < 0 || a >= ubw || b2 >= ubh) continue; const u = underMap[b2 * ubw + a]; if (Number.isNaN(u) || thickMap[b2 * ubw + a] < 0.45) continue; const d = u - h[k]; if (d > 0.04 && d < 0.8 && u > top) top = u; }
+          if (top === -Infinity || noWallSeat) continue; h[k] = top + 0.03; relaxFixed[k] = 1; walls++; }
+        console.info('[walls] земля подведена под висящие стены, клеток:', walls); (window as unknown as { __wallSeat: number }).__wallSeat = walls;
+        console.info('[paving] земля подведена под мощение Revit, клеток:', seated); (window as unknown as { __pavingSeat: number }).__pavingSeat = seated; }
       relax(relaxFixed);
       // продольный профиль дорожек: пандусы не круче 1:8, где круче — лестницы; рельеф в коридоре дорожки зафиксирован
       setStage('terrain:paths-grade');
-      graded = gradePaths(net, { h, x0, z0, step, nx, nz }, relaxFixed);
+      graded = gradePaths(net, { h, x0, z0, step, nx, nz }, relaxFixed, 2.6, paveAt);
       h.set(graded.h); relaxFixed.set(graded.fixed);
       // террасы: где мембрана всё же круче 1:3,3 (между рядами 1.x и 2.x перепад 4–8 м на 10–20 м) — подпорные
       // стенки по горизонталям и лестницы на дорожках (Terraces.ts); газон между стенками релаксируется заново
@@ -1053,6 +1124,15 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     const nbHouses = village.houses;
     console.info('[surroundings]', 'дорог', (roadsB.length / 1000).toFixed(1), 'км, домов', village.count);
     // подпорные стенки и лестницы террас (каменные), лотосы у берега лагуны
+    // мощение Revit, повисшее над итоговым рельефом, срезается (после профиля дорожек и террас: рельеф уже окончательный)
+    { const gridH = (x: number, z: number): number | null => { const fx = (x - x0) / step, fz = (z - z0) / step; if (fx < 0 || fz < 0 || fx > nx - 1.001 || fz > nz - 1.001 || hiddenW(x, z)) return null; /* под домом рельеф не рисуется и отметок не держит */ const i = Math.floor(fx), j = Math.floor(fz), tx = fx - i, tz = fz - j; return (h[j * nx + i] * (1 - tx) + h[j * nx + i + 1] * tx) * (1 - tz) + (h[(j + 1) * nx + i] * (1 - tx) + h[(j + 1) * nx + i + 1] * tx) * tz; };
+      // замер: нижняя кромка стены (деталь выше 0,45 м) над видимым газоном соседнего открытого блока больше чем на 10 см
+      { let n = 0, worst = 0; const at: number[][] = []; const cx = (bi: number) => x0 + (bi * UB + UB / 2 - 0.5) * WX, cz = (bj: number) => z0 + (bj * UB + UB / 2 - 0.5) * WX;
+        for (let bj = 1; bj < ubh - 1; bj++) for (let bi = 1; bi < ubw - 1; bi++) { const u = underMap[bj * ubw + bi]; if (Number.isNaN(u) || thickMap[bj * ubw + bi] < 0.45) continue;
+          for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const y = gridH(cx(bi + di), cz(bj + dj)); if (y === null) continue; const un = underMap[(bj + dj) * ubw + bi + di]; if (!Number.isNaN(un) && un - y < 1.6) continue; // сосед не открыт: над ним деталь модели
+            const d = u - y; if (d <= 0.1 || d >= 1.6) continue; n++; if (d > worst) worst = d; if (at.length < 600) at.push([+cx(bi).toFixed(1), +cz(bj).toFixed(1), +d.toFixed(2)]); break; } }
+        (window as unknown as { __wallHang: unknown }).__wallHang = { len: +(n * UB * WX).toFixed(1), worst: +worst.toFixed(2), at }; console.info('[walls] стены над газоном (зазор больше 10 см), м:', (n * UB * WX).toFixed(1), 'до', worst.toFixed(2)); }
+      let cut = 0; for (const inst of instances) { const rg = revitGround.get(inst); if (rg) { cut += cutHangingPaving(inst, gridH, rg); rg.geometry.dispose(); } } revitGround.clear(); console.info('[paving] срезано повисшего мощения Revit, кусков до 0,15 м:', cut); (window as unknown as { __pavingCut: number }).__pavingCut = cut; }
     const walls = terr ? wallGeometry(terr.walls) : null; const stairG = { treads: graded ? stepGeometry(graded.steps) : null, cheeks: null as BufferGeometry | null }; void inHouseMask;
     // верх ступени под точкой (для персонажей: игрок ходит по коллайдеру ступеней сам)
     const stepList = graded ? graded.steps : [];
@@ -1191,7 +1271,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       }
       return out.sort((p1, p2) => p2.area - p1.area);
     };
-    (window as unknown as { __complex: unknown }).__complex = { holeScan, walkAt, ribbonTop, pathFloat: +pathFloat.toFixed(3), seat: seatStats, facade: { ...facadeStats }, heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length, folds: graded.folds, list: graded.steps }, net, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
+    (window as unknown as { __complex: unknown }).__complex = { holeScan, walkAt, ribbonTop, hiddenW, pathFloat: +pathFloat.toFixed(3), seat: seatStats, facade: { ...facadeStats }, heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length, folds: graded.folds, list: graded.steps }, net, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
   }, [data, instances, houses]);
 
   // коллайдер всего комплекса: дома (с проёмами дверей в системе координат каждого дома, без растений и штор),
