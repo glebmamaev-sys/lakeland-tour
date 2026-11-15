@@ -25,4 +25,6 @@ for (const k0 of keys) { if (seen.has(k0)) continue; const comp = [k0]; seen.add
   comps.push([+(comp.length * ST * ST).toFixed(2), +x.toFixed(1), +z.toFixed(1), near]); }
 comps.sort((a, b) => b[0] - a[0]);
 const feet = []; const N = window.__npcs; if (N && N.walkers && C.walkAt) for (let s = 0; s < 6; s++) { await new Promise((r) => setTimeout(r, 400)); for (const w of N.walkers) { const p = w.h.root.position; const y = C.walkAt(p.x, p.z); if (y !== null) feet.push(+(y - p.y).toFixed(3)); } }
-return { holes: { n: comps.length, area: +comps.reduce((a, c) => a + c[0], 0).toFixed(1), top: comps.slice(0, 6) }, feet: { n: feet.length, sink: feet.length ? Math.max(...feet) : null }, pathFloat: C.pathFloat ?? null };
+// ступени не стоят на чужой дорожке: центр ступени над лентой и выше/ниже неё больше чем на 20 см — обрубок посреди полотна
+const stubs = []; if (C.graded && C.graded.list && C.ribbonTop) for (const s of C.graded.list) { const r = C.ribbonTop(s.x, s.z); if (r !== null && Math.abs(s.top - r) > 0.2) stubs.push([+s.x.toFixed(1), +s.z.toFixed(1), +(s.top - r).toFixed(2)]); }
+return { stairs: C.graded ? { steps: C.graded.steps, stubs, folds: C.graded.folds } : null, holes: { n: comps.length, area: +comps.reduce((a, c) => a + c[0], 0).toFixed(1), top: comps.slice(0, 6) }, feet: { n: feet.length, sink: feet.length ? Math.max(...feet) : null }, pathFloat: C.pathFloat ?? null };

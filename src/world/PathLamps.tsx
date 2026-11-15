@@ -14,7 +14,7 @@ export function buildPathLamps(lines: Vector3[][], hAt: (x: number, z: number) =
   for (const [x, z] of extra) add(x, z);
   let side = 1;
   for (const line of lines) {
-    if (line.length < 2) continue; const cv = new CatmullRomCurve3(line, false, 'catmullrom', 0.3); const L = cv.getLength(); const n = Math.max(1, Math.round(L / 7));
+    if (line.length < 2) continue; const cv = new CatmullRomCurve3(line, false, 'centripetal'); const L = cv.getLength(); const n = Math.max(1, Math.round(L / 7));
     for (let i = 0; i < n; i++) { const u = (i + 0.5) / n; const q = cv.getPointAt(u), tg = cv.getTangentAt(u); side = -side; add(q.x - tg.z * 1.75 * side, q.z + tg.x * 1.75 * side); }
   }
   if (!pts.length) return { posts: null, heads: null, pools: null, count: 0 };

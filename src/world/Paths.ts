@@ -191,7 +191,7 @@ export function buildPathNetwork(houses: HouseLite[], entrance: [number, number]
 /** Лента дорожки по сглаженной кривой, прилегает к рельефу (+lift), UV: u поперёк 0..1, v вдоль (м / width). */
 export function pathRibbon(line: Vector3[], width: number, heightAt: (x: number, z: number) => number | null, lift = 0.1): BufferGeometry | null {
   if (line.length < 2) return null;
-  const curve = new CatmullRomCurve3(line, false, 'catmullrom', 0.3);
+  const curve = new CatmullRomCurve3(line, false, 'centripetal');
   const len = curve.getLength(); const n = Math.max(2, Math.ceil(len / 0.5)); // шаг 0,5 м = шаг сетки рельефа: газон не проступает между опорными точками
   const pts = curve.getSpacedPoints(n);
   const P: number[] = [], U: number[] = [], N: number[] = []; const idx: number[] = [];

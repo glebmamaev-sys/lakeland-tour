@@ -834,7 +834,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     // автопроверка (scripts/smoke.mjs): точки осей дорожек (шаг 0,5 м) внутри маски комнат и внутри бассейнов — должно быть 0
     const pathCheck = { pts: 0, inHouse: 0, inPool: 0 };
     (window as unknown as { __pathDbg: unknown }).__pathDbg = { lines: net.lines.map((l) => l.map((q) => [+q.x.toFixed(2), +q.z.toFixed(2)])), blocked: (x: number, z: number) => indoorW(x, z) !== null, pool: (x: number, z: number) => pools.some((b) => x > b.min.x - 1.0 && x < b.max.x + 1.0 && z > b.min.z - 1.0 && z < b.max.z + 1.0), door: pose ? pose.door : null };
-    for (const line of net.lines) { if (line.length < 2) continue; const cv = new CatmullRomCurve3(line, false, 'catmullrom', 0.3); const np = Math.max(2, Math.ceil(cv.getLength() / 0.5));
+    for (const line of net.lines) { if (line.length < 2) continue; const cv = new CatmullRomCurve3(line, false, 'centripetal'); const np = Math.max(2, Math.ceil(cv.getLength() / 0.5));
       for (const q of cv.getSpacedPoints(np)) { pathCheck.pts++; if (indoorW(q.x, q.z) !== null) pathCheck.inHouse++; if (pools.some((b) => q.x > b.min.x && q.x < b.max.x && q.z > b.min.z && q.z < b.max.z)) pathCheck.inPool++; } }
     let terr: Terraces | null = null; let graded: Graded | null = null; let skirtGeom: BufferGeometry | null = null;
     let seatStats: Record<string, [number, number]> | null = null; // посадка по домам: [земля выше плиты, плита выше земли] — максимумы по границе пятна, м
@@ -1145,7 +1145,8 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         const t = k / (n + 1); const side = (k % 2 ? 1 : -1) * 3.2; const dx = (b.x - a.x) / L, dz = (b.z - a.z) / L;
         const px = a.x + dx * L * t - dz * side, pz = a.z + dz * L * t + dx * side;
         if (!inPoly(px, pz, c.site.boundary) || nearHouse(px, pz, 12) || r() > 0.7) continue;
-        const y = siteAt(px, pz); if (y === null) continue; frangipani.push({ x: px, y: y - 0.05, z: pz, s: r(), r: r() });
+        const y = siteAt(px, pz); if (y === null) continue; const fs = r(), fr = r(); if (distToPaths(net, px, pz) < 2.2) continue; // дерево у одной дорожки не должно встать на соседнюю (у стыков)
+        frangipani.push({ x: px, y: y - 0.05, z: pz, s: fs, r: fr });
       }
     }
     setStage('terrain:done');
@@ -1190,7 +1191,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       }
       return out.sort((p1, p2) => p2.area - p1.area);
     };
-    (window as unknown as { __complex: unknown }).__complex = { holeScan, walkAt, pathFloat: +pathFloat.toFixed(3), seat: seatStats, facade: { ...facadeStats }, heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length }, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
+    (window as unknown as { __complex: unknown }).__complex = { holeScan, walkAt, ribbonTop, pathFloat: +pathFloat.toFixed(3), seat: seatStats, facade: { ...facadeStats }, heightAt, data: c, root: instRoot.current, h, x0, z0, step, nx, nz, houses, terraces: terr && { walls: terr.walls, stairs: terr.stairs, blobs: terr.blobs }, graded: graded && { flights: graded.flights, steps: graded.steps.length, folds: graded.folds, list: graded.steps }, net, lotus: lotus.length, lamps: lamps.count, village: village.count, roadsKm: +(roadsB.length / 1000).toFixed(1), trees: trees.length, pathCheck, pathLines: net.lines.length, gate: gate && [+gate.x.toFixed(1), +gate.z.toFixed(1)], arrive: entrance?.arrive ?? null };
   }, [data, instances, houses]);
 
   // коллайдер всего комплекса: дома (с проёмами дверей в системе координат каждого дома, без растений и штор),
