@@ -116,7 +116,10 @@ async function capturePano(gl: WebGLRenderer, scene: Scene, camera: Camera, opts
   const face = opts.size ?? 2048, W = face * 2, H = face;
   const hidden = hideSprites(scene);
   const cubeRT = new WebGLCubeRenderTarget(face, { type: HalfFloatType, generateMipmaps: false, minFilter: LinearFilter, magFilter: LinearFilter });
-  const cubeCam = new CubeCamera(0.05, 600, cubeRT);
+  // Дальность берётся у камеры сцены (в «Комплексе» 9 км). Раньше стояло 600 м: дальний берег лагуны (700–1000 м)
+  // попадал в кадр только у рёбер куба и выглядел на панораме цепочкой островов среди открытой воды
+  const camFar = (camera as PerspectiveCamera).far ?? 600; const far = Math.max(600, camFar);
+  const cubeCam = new CubeCamera(far > 600 ? 0.15 : 0.05, far, cubeRT);
   cubeCam.position.copy(camera.position);
   scene.add(cubeCam);
   cubeCam.update(gl, scene);

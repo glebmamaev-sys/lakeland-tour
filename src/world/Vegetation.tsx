@@ -151,7 +151,7 @@ export function Palms({ near, far }: { near: Plant[]; far: Plant[] }) {
   const trunk = useMemo(() => makeTrunk(), []), trunkLite = useMemo(() => makeTrunk(true), []);
   // дальние пальмы окрестностей (их ~16 тысяч до 1,5 км): лёгкий ствол, без теней (карта теней покрывает только участок),
   // дальше 700 м — примерно каждая вторая. Раньше они давали половину всех треугольников кадра, считая проход теней
-  const farLite = useMemo(() => far.filter((p) => { const d = Math.hypot(p.x, p.z); return input.mobile ? d < 450 || (d < 900 && p.s < 0.35) : d < 700 || p.s < 0.55; }), [far]); // телефон: до 900 м и реже
+  const farLite = useMemo(() => far.filter((p) => { const d = Math.hypot(p.x, p.z); return input.mobile ? d < 450 || (d < 900 && p.s < 0.35) : d < 950 || p.s < 0.7; }), [far]); // телефон: до 900 м и реже
   const crownA = useMemo(() => makePalmCrown(3), []), crownB = useMemo(() => makePalmCrown(9, 11), []);
   const simple = useMemo(() => makeSimpleCrown(), []);
   const nearA = useMemo(() => near.filter((_, i) => i % 2 === 0), [near]), nearB = useMemo(() => near.filter((_, i) => i % 2 === 1), [near]);

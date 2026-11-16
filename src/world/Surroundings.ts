@@ -16,7 +16,7 @@ export function buildRoads(roads: XZ[][], hAt: H, skip: (x: number, z: number) =
   for (const r of roads) {
     // дорога режется на куски по дальности: кусок целиком ближе 450 м — подробный
     let cur: XZ[] = []; let curNear = true;
-    const flush = () => { if (cur.length > 1) { const g = ribbon(cur, curNear ? 5.2 : 5.6, hGate, curNear ? 0.14 : 0.3, curNear ? 1.5 : 5, curNear); if (g) parts.push(g); } cur = []; };
+    const flush = () => { if (cur.length > 1) { const g = ribbon(cur, curNear ? 3.4 : 3.6, hGate, curNear ? 0.14 : 0.3, curNear ? 1.5 : 5, curNear); if (g) parts.push(g); } cur = []; };
     for (let i = 0; i < r.length; i++) {
       const p = r[i]; const d = Math.hypot(p[0], p[1]); if (d > maxDist) { flush(); continue; }
       const isNear = d < 450; if (cur.length && isNear !== curNear) { const last = cur[cur.length - 1]; flush(); cur = [last]; } curNear = isNear; cur.push(p);

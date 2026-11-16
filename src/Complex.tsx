@@ -1206,6 +1206,12 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     // пальмы: окрестности (сетка 14 м со случайным сдвигом, суша, не на домах) и участок (в зелёных зонах, не на дорожках);
     // ближние (до 260 м от центра участка) — с перистыми листьями, дальние — простые
     const r = rng(7); const near: Plant[] = [], far: Plant[] = [];
+    // посадки не встают на плиты, ступени, стены и под навесы модели: рядом (rad) нет ни одного блока 0,2 м с деталью дома.
+    // Раньше пальма росла прямо из входной лестницы виллы 1.3. Проверка идёт после всех r(), случайный ряд не сдвигается
+    const onModel = (x: number, z: number, rad: number) => { const bi = Math.round((x - x0) / WX / UB - 0.25), bj = Math.round((z - z0) / WX / UB - 0.25), R = Math.ceil(rad / (WX * UB));
+      for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) { const i = bi + di, j = bj + dj; if (i < 0 || j < 0 || i >= ubw || j >= ubh || di * di + dj * dj > R * R) continue; if (!Number.isNaN(underMap[j * ubw + i])) return true; }
+      return false; };
+    let offModel = 0;
     const nearHouse = (x: number, z: number, d = 17) => c.buildings.some((b) => Math.hypot(x - b.pos[0], z - b.pos[1]) < d);
     for (let z = -1500; z < 1500; z += 14) for (let x = -1500; x < 1500; x += 14) {
       const px = x + (r() - 0.5) * 12, pz = z + (r() - 0.5) * 12;
@@ -1213,20 +1219,35 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       if (r() > pKeep) continue;
       if (inPoly(px, pz, c.site.boundary)) continue;
       const y = heightAt(px, pz); if (y === null) continue;
-      const ps = r(), pr = r(); if (entrance?.keepOut(px, pz) || roadsB.near(px, pz, 5.5) || village.spots.some((q) => Math.abs(q[0] - px) < 9 && Math.abs(q[1] - pz) < 9)) continue; // на парковке, дорогах и домах пальм нет (случайный ряд не сдвигается)
+      const ps = r(), pr = r(); if (entrance?.keepOut(px, pz) || roadsB.near(px, pz, 3.4) || village.spots.some((q) => Math.abs(q[0] - px) < 9 && Math.abs(q[1] - pz) < 9)) continue; // на парковке, дорогах и домах пальм нет (случайный ряд не сдвигается)
       (Math.hypot(px, pz) < 260 ? near : far).push({ x: px, y: y - 0.2, z: pz, s: ps, r: pr });
     }
+    // Окрестности по спутнику — сплошные кокосовые рощи, берег лагуны зарос до воды. Второй проход (свой генератор,
+    // сетка сдвинута на полшага): рощи гуще, а в полосе 4–60 м от уреза воды пальмы стоят почти сплошь, чтобы дальний
+    // берег с террас читался непрерывной зелёной полосой, а не островами. На телефоне прохода нет
+    if (!input.mobile) { const r2 = rng(4241);
+      for (let z = -1493; z < 1500; z += 14) for (let x = -1493; x < 1500; x += 14) {
+        const px = x + (r2() - 0.5) * 12, pz = z + (r2() - 0.5) * 12, k = r2(), ps = r2(), pr = r2();
+        const lc = coverAt(px, pz); if (lc === 3) continue; const sd = sdAt(px, pz); const fringe = sd > 4 && sd < 60;
+        if (k > (fringe ? 0.75 : lc === 1 ? 0.22 : lc === 0 ? 0.15 : 0.03)) continue; // числа подобраны под бюджет кадра с дрона (3,5 млн треугольников)
+        if (Math.hypot(px, pz) < 150 || inPoly(px, pz, c.site.boundary) || waterAt(px, pz)) continue;
+        const y = heightAt(px, pz); if (y === null || y < W + 0.3) continue;
+        if (entrance?.keepOut(px, pz) || roadsB.near(px, pz, 3.4) || village.spots.some((q) => Math.abs(q[0] - px) < 9 && Math.abs(q[1] - pz) < 9)) continue;
+        (Math.hypot(px, pz) < 260 ? near : far).push({ x: px, y: y - 0.2, z: pz, s: ps, r: pr });
+      } }
     for (let k = 0; k < 900; k++) {
       const px = -95 + r() * 190, pz = -75 + r() * 150;
       if (!inPoly(px, pz, c.site.boundary) || waterAt(px, pz) || nearHouse(px, pz) || distToPaths(net, px, pz) < 2.5 || r() > 0.35) continue;
       const y = siteAt(px, pz); if (y === null) continue;
-      near.push({ x: px, y: y - 0.2, z: pz, s: r(), r: r() });
+      const ps = r(), pr = r(); if (onModel(px, pz, 1.8)) { offModel++; continue; }
+      near.push({ x: px, y: y - 0.2, z: pz, s: ps, r: pr });
     }
     // лиственные деревья окрестностей: рощи по карте растительности (лес — густо, поля — редко), не на дорогах и домах
     const trees: Plant[] = []; { const rt = rng(99); const TR = input.mobile ? 800 : 1300;
-      for (let z = -TR; z < TR; z += 24) for (let x = -TR; x < TR; x += 24) {
-        const px = x + (rt() - 0.5) * 22, pz = z + (rt() - 0.5) * 22; const lc = coverAt(px, pz); const keep = lc === 1 ? 0.6 : lc === 2 ? 0.05 : lc === 0 ? 0.22 : 0; const k = rt(), ts = rt(), tr = rt();
-        if (k > keep || inPoly(px, pz, c.site.boundary) || inGrid(px, pz, -6) || entrance?.keepOut(px, pz) || roadsB.near(px, pz, 7) || village.spots.some((q) => Math.abs(q[0] - px) < 10 && Math.abs(q[1] - pz) < 10)) continue;
+      const TG = input.mobile ? 24 : 19; // шаг сетки: на компьютере рощи гуще
+      for (let z = -TR; z < TR; z += TG) for (let x = -TR; x < TR; x += TG) {
+        const px = x + (rt() - 0.5) * (TG - 2), pz = z + (rt() - 0.5) * (TG - 2); const lc = coverAt(px, pz); const sdT = sdAt(px, pz); const keep = lc === 3 ? 0 : !input.mobile && sdT > 3 && sdT < 45 ? 0.85 : lc === 1 ? 0.6 : lc === 2 ? 0.05 : lc === 0 ? 0.22 : 0; const k = rt(), ts = rt(), tr = rt();
+        if (k > keep || inPoly(px, pz, c.site.boundary) || inGrid(px, pz, -6) || entrance?.keepOut(px, pz) || roadsB.near(px, pz, 4.5) || village.spots.some((q) => Math.abs(q[0] - px) < 10 && Math.abs(q[1] - pz) < 10)) continue;
         const y = heightAt(px, pz); if (y === null || y < W + 0.6) continue; trees.push({ x: px, y: y - 0.2, z: pz, s: ts, r: tr });
       } }
     // кусты: вдоль контуров домов (с отступом 1,5–2,5 м, не у входов) и россыпью по газону; франжипани вдоль дорожек
@@ -1238,13 +1259,13 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       for (const [lx, lz] of per) {
         if (r() > 0.6) continue;
         const w = new Vector3(lx, 0, lz).applyMatrix4(hs.matrix); if (!inPoly(w.x, w.z, c.site.boundary) || waterAt(w.x, w.z) || distToPaths(net, w.x, w.z) < 1.8) continue;
-        const y = siteAt(w.x, w.z); if (y === null) continue; shrubs.push({ x: w.x, y: y - 0.1, z: w.z, s: r(), r: r() });
+        const y = siteAt(w.x, w.z); if (y === null) continue; const ss = r(), sr = r(); if (onModel(w.x, w.z, 0.7)) { offModel++; continue; } shrubs.push({ x: w.x, y: y - 0.1, z: w.z, s: ss, r: sr });
       }
     }
     for (let k = 0; k < 500; k++) {
       const px = -95 + r() * 190, pz = -75 + r() * 150;
       if (!inPoly(px, pz, c.site.boundary) || waterAt(px, pz) || nearHouse(px, pz, 14) || distToPaths(net, px, pz) < 2 || r() > 0.5) continue;
-      const y = siteAt(px, pz); if (y === null) continue; shrubs.push({ x: px, y: y - 0.1, z: pz, s: r(), r: r() });
+      const y = siteAt(px, pz); if (y === null) continue; const ss = r(), sr = r(); if (onModel(px, pz, 0.7)) { offModel++; continue; } shrubs.push({ x: px, y: y - 0.1, z: pz, s: ss, r: sr });
     }
     for (const l of net.lines) for (let i = 0; i < l.length - 1; i++) {
       const a = l[i], b = l[i + 1]; const L = a.distanceTo(b); const n = Math.floor(L / 9);
@@ -1253,9 +1274,11 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         const px = a.x + dx * L * t - dz * side, pz = a.z + dz * L * t + dx * side;
         if (!inPoly(px, pz, c.site.boundary) || nearHouse(px, pz, 12) || r() > 0.7) continue;
         const y = siteAt(px, pz); if (y === null) continue; const fs = r(), fr = r(); if (distToPaths(net, px, pz) < 2.2) continue; // дерево у одной дорожки не должно встать на соседнюю (у стыков)
+        if (onModel(px, pz, 1.2)) { offModel++; continue; }
         frangipani.push({ x: px, y: y - 0.05, z: pz, s: fs, r: fr });
       }
     }
+    console.info('[plants]', 'снято с плит и ступеней модели:', offModel); (window as unknown as { __offModel: number }).__offModel = offModel;
     setStage('terrain:done');
     const hpInv = houses.map((hh) => ({ m: hh.matrix.clone().invert(), fp: hh.fp })); const lpG = new Vector3(); const shopB = c.buildings.find((b) => b.model === 'shop');
     const grassOk = (x: number, z: number) => {

@@ -518,8 +518,10 @@ function putDining(p: Placer, r: RoomInfo, x: number, z: number, alongX: boolean
  *  1) гарнитур с холодильником — вдоль глухого участка стены, ближайшего к метке кухни;
  *  2) обеденный стол — параллельно гарнитуру (при глубине ≥ 6,4 м между ними остров), вне проходов;
  *  3) диван с журнальным столом — у самой дальней от кухни глухой стены, вне проходов от дверей и проёмов.
- *  Глухой участок: луч находит стену, рядом нет витрины, место свободно (put-проверки). */
-function furnishOpenPlan(p: Placer, r: RoomInfo, seed: number) {
+ *  Глухой участок: луч находит стену, рядом нет витрины, место свободно (put-проверки).
+ *  ownKitchen — в модели виллы уже есть свой гарнитур (вилла 1): второй гарнитур и холодильник не ставятся, на их
+ *  стене комод и три картины; стол и диван остаются на тех же местах, что и с гарнитуром. */
+function furnishOpenPlan(p: Placer, r: RoomInfo, seed: number, ownKitchen = false) {
   const R = r.rect; const notes: string[] = []; const K = r.label ?? [r.cx, r.cz];
   const solidAt = (s: Side, along: number) => { const w = nearWall(R, s, 0.3, along); return !p.glassOnWall(s, along) && p.wallAt(w.x, w.z, w.n); };
   type Run = { s: Side; a0: number; a1: number }; const runs: Run[] = []; const corr: Rect[] = [];
@@ -549,10 +551,24 @@ function furnishOpenPlan(p: Placer, r: RoomInfo, seed: number) {
     const s = q.s, L = sideLen(R, s), n = inward(s), yaw = yawTo(n); const total = Math.min(q.a1 - q.a0, 4.3);
     const fromA0 = Math.abs(q.a0 + L / 2) <= Math.abs(L / 2 - q.a1); const dir = fromA0 ? 1 : -1, start = fromA0 ? q.a0 : q.a1; // от конца, ближнего к углу комнаты
     const withFridge = total >= 2.35; let bl = total - (withFridge ? 0.78 : 0) - 0.05, done = false, ac = 0, c = nearWall(R, s, 0.33, 0);
-    for (let k = 0; k < 6 && bl >= 1.5; k++, bl -= 0.3) { ac = start + dir * ((withFridge ? 0.78 : 0) + bl / 2); c = nearWall(R, s, 0.33, ac); if (p.put(F.kitchenBase(bl), c.x, c.z, yaw, bl, 0.66, p.matte, 0.2)) { done = true; break; } }
+    for (let k = 0; k < 6 && bl >= 1.5; k++, bl -= 0.3) { ac = start + dir * ((withFridge ? 0.78 : 0) + bl / 2); c = nearWall(R, s, 0.33, ac); if (ownKitchen ? p.free(c.x, c.z, yaw, bl, 0.66, 0.2) : p.put(F.kitchenBase(bl), c.x, c.z, yaw, bl, 0.66, p.matte, 0.2)) { done = true; break; } }
     if (!done) continue;
-    p.putAt(F.kitchenUpper(bl), c.x - n.x * 0.12, r.y, c.z - n.z * 0.12, yaw);
-    if (withFridge) { const f = nearWall(R, s, 0.36, start + dir * 0.38); p.put(F.fridge(), f.x, f.z, yaw, 0.72, 0.68, p.matte, 0.2); }
+    if (ownKitchen) {
+      // стена вместо гарнитура: комод по центру бывшего ряда и триптих над ним (одна картина, разрезанная на три полотна)
+      const am = start + dir * (total / 2), sl = Math.min(1.8, total - 0.6), sb = nearWall(R, s, 0.27, am);
+      p.put(F.sideboard(sl), sb.x, sb.z, yaw, sl, 0.46, p.matte, 0.1);
+      const fw = 0.7, fh = 0.95, gap = Math.min(0.95, (total - fw) / 2 - 0.1);
+      const wl = nearWall(R, s, 0.04, am - gap), wr = nearWall(R, s, 0.04, am + gap);
+      const sg = (wr.x - wl.x) * n.z - (wr.z - wl.z) * n.x >= 0 ? 1 : -1; // куда растёт «вдоль стены» для смотрящего на стену: вправо (+1) или влево
+      for (let i = -1; i <= 1; i++) {
+        const art = F.artFrame(fw, fh), wb = nearWall(R, s, 0.04, am + i * gap);
+        const uv = art.canvas.attributes.uv; for (let k = 0; k < uv.count; k++) uv.setX(k, (i * sg + 1 + uv.getX(k)) / 3); // левое полотно — левая треть картины
+        p.putAt(art.frame, wb.x, r.y + 1.2, wb.z, yaw); p.putAt(art.canvas, wb.x, r.y + 1.2, wb.z, yaw, p.art);
+      }
+    } else {
+      p.putAt(F.kitchenUpper(bl), c.x - n.x * 0.12, r.y, c.z - n.z * 0.12, yaw);
+      if (withFridge) { const f = nearWall(R, s, 0.36, start + dir * 0.38); p.put(F.fridge(), f.x, f.z, yaw, 0.72, 0.68, p.matte, 0.2); }
+    }
     KC = { x: c.x, z: c.z }; kSide = s; kAlong = ac; kLen = bl; notes.push('kitchen@' + s); break;
   }
   if (!KC || !kSide) { console.info('[open]', 'гарнитур не поместился', R); return; }
@@ -796,7 +812,7 @@ export function furnishVilla(plan: Plan, glass: Box3[], passages: Passage[], art
       else if (kind === 'bath') furnishBath(p, info, seed);
       else if (kind === 'wc') furnishBath(p, info, seed, false);
       else if (kind === 'laundry') furnishLaundry(p, info);
-      else if (kind === 'open') furnishOpenPlan(p, info, seed);
+      else if (kind === 'open') furnishOpenPlan(p, info, seed, plan.villa === 'villa1'); // у виллы 1 гарнитур есть в самой модели
       else if (kind === 'terrace') furnishTerrace(p, info, seed);
       else if (kind === 'kitchen') furnishKitchen(p, info);
       (dbg[dbg.length - 1] as { placed: number; note: string }).placed = p.placed.filter((it) => !it.fail).length; (dbg[dbg.length - 1] as { note: string }).note = (p as unknown as { note?: string }).note ?? '';

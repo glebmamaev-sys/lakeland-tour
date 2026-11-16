@@ -23,7 +23,7 @@
       "bedroom@6.6 4.2×3.6 — 2 предм. bed@pz",
       "bedroom@6.6 4.4×3.6 — 2 предм. bed@nx",
       "living@9.9 3.0×3.0 — 4 предм. sofa@nx",
-      "open@0 9.8×4.8 — 12 предм. open: kitchen@nz dining sofa@nx",
+      "open@0 9.8×4.8 — 11 предм. open: kitchen@nz dining sofa@nx",
       "terrace@0 13.2×8.8 — 13 предм. lounge+dining",
       "terrace@3.3 3.0×3.0 — 3 предм. lounge",
       "terrace@6.6 15.0×7.8 — 13 предм. sunbeds+lounge",
@@ -121,7 +121,7 @@
   "lamps": 22,
   "village": 359,
   "roadsKm": 40.7,
-  "trees": 3306,
+  "trees": 5811,
   "facade": {
     "masks": {
       "villa1": 4,
