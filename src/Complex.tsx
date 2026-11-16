@@ -1005,6 +1005,22 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       const skipT = (x: number, z: number) => !inPoly(x, z, B) || nearWater(x, z) || hiddenW(x, z) || hiddenW(x + 1, z) || hiddenW(x - 1, z) || hiddenW(x, z + 1) || hiddenW(x, z - 1) || shopHit(x, z) || (!!pose && Math.hypot(x - pose.door[0], z - pose.door[1]) < 4.5); // пятна домов (+1 м), пятно магазина (+0,8 м) и площадку у его двери не террасируем. Раньше исключался круг 10 м вокруг магазина — с нагорной стороны оставался газонный откос 1,3 м на 2 м; теперь там встаёт подпорная стенка, как везде
       terr = planTerraces({ h, x0, z0, step, nx, nz }, relaxFixed, skipT, net, false); // лестницы — у дорожек (PathGrade), стенки у дорожек сходят на нет
       h.set(terr.h); relax(terr.fixed);
+      // «клыки» у стен: уличная клетка вплотную к пятну дома, оставшаяся на сыром рельефе выше соседней уличной больше чем
+      // на 0,5 м, опускается до неё. У виллы 3 нижний этаж врезан в склон: ряд клеток между фасадом и выровненным садом у
+      // бассейна торчал зелёными пиками до 1,5 м прямо перед витражами
+      const fangCell = new Uint8Array(nx * nz); // опущенные клетки: у них открытый фасад заглублённого этажа, цоколь и замер посадки там не нужны
+      { const hid = (i: number, j: number) => hiddenW(x0 + i * step, z0 + j * step); let fangs = 0;
+        for (let pass = 0; pass < 2; pass++) { const src = Float32Array.from(h);
+          for (let j = 2; j < nz - 2; j++) for (let i = 2; i < nx - 2; i++) {
+            const k = j * nx + i; if (hid(i, j) || shore[k]) continue;
+            let near = false; for (let dj = -1; dj <= 1 && !near; dj++) for (let di = -1; di <= 1; di++) if (hid(i + di, j + dj)) { near = true; break; } if (!near) continue;
+            let lo = Infinity; for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (!hid(i + di, j + dj)) lo = Math.min(lo, src[(j + dj) * nx + i + di]);
+            if (!(src[k] - lo > 0.5)) continue;
+            // только у заглублённого этажа: рядом клетка пятна дома с плитой на той же отметке, что и низкий сосед (пол выходит
+            // на этот уровень). Без условия правка опускала землю у обычных стен, и они повисали над газоном (до 91 см)
+            let level = false; for (let dj = -1; dj <= 1 && !level; dj++) for (let di = -1; di <= 1; di++) { const n = (j + dj) * nx + i + di; if (footMask[n] && Math.abs(slabTop[n] - lo) < 0.2) { level = true; break; } }
+            if (level) { h[k] = lo; fangs++; fangCell[k] = 1; } } }
+        console.info('[fangs] клетки-пики у стен домов опущены:', fangs); (window as unknown as { __fangs: number }).__fangs = fangs; }
       // кромка скрытого пятна дома: клетки под домом, граничащие с улицей, берут уличную отметку — переходные треугольники
       // на границе становятся плоскими (иначе «пила» там, где рельеф Revit под домом выше/ниже улицы)
       { const src = Float32Array.from(h); const hid = (i: number, j: number) => hiddenW(x0 + i * step, z0 + j * step);
@@ -1021,6 +1037,7 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           const k = j * nx + i; if (!footMask[k] || Number.isNaN(slabTop[k])) continue; const x = x0 + i * step, z = z0 + j * step;
           for (const [n, dx, dz] of [[k + 1, 1, 0], [k - 1, -1, 0], [k + nx, 0, 1], [k - nx, 0, -1]] as [number, number, number][]) {
             if (hiddenW(x0 + (n % nx) * step, z0 + Math.floor(n / nx) * step)) continue; // сосед тоже под домом
+            if (fangCell[n]) continue; // открытый фасад заглублённого этажа: плита верхнего уровня над садом — не цоколь
             const top = slabTop[k], ground = h[n]; if (!openedCell[n]) seatDbg.push(+x.toFixed(2), +z.toFixed(2), +top.toFixed(2), +ground.toFixed(2)); if (Math.abs(top - ground) < 0.12) continue;
             const y0 = Math.min(top, ground) - 0.3, y1 = Math.max(top, ground) + 0.05;
             const mx = x + dx * step / 2, mz = z + dz * step / 2;
