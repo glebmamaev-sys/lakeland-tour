@@ -15,8 +15,10 @@ export type Pano = {
 // Переход между панорамами — кнопками внизу экрана; точки-переходы внутри панорам не ставим
 // (нейросеть не гарантирует точное положение дверей). Художественная визуализация.
 // Панорамы, пересобранные по граням в 8К (с 16.11.2026): у них есть файл <имя>_8k.jpg
-const HI = new Set(['villa1_p5_roof']);
-const START: Record<string, number> = { villa1_p5_roof: -50 }; // куда смотрим при входе: сад с дорожкой слева, лагуна справа
+const HI = new Set(['villa1_p1_pool', 'villa1_p2_covered_terrace', 'villa1_p3_kitchen', 'villa1_p4_bedroom', 'villa1_p5_roof']);
+// Куда смотрим при входе: бассейн — на террасу с диваном и фасад; крытая терраса — на лагуну; кухня — на стол и гостиную;
+// спальня — на кровать; крыша — сад с дорожкой слева, лагуна справа
+const START: Record<string, number> = { villa1_p1_pool: 45, villa1_p2_covered_terrace: -95, villa1_p3_kitchen: -100, villa1_p4_bedroom: 84, villa1_p5_roof: -50 };
 const tour = (villa: string, items: [string, string][]): Pano[] =>
   items.map(([id, title]) => ({ id, title, src: `panos/${villa}_${id}.jpg`, ...(HI.has(`${villa}_${id}`) ? { hi: `panos/${villa}_${id}_8k.jpg` } : {}), ...(`${villa}_${id}` in START ? { startYaw: START[`${villa}_${id}`] } : {}), links: [] }));
 
