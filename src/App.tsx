@@ -53,7 +53,7 @@ export default function App() {
   const villa = VILLAS[villaId];
   const tour = PANO_TOURS[villaId] ?? [];
   const hasPanos = tour.length > 0;
-  const [panoId, setPanoId] = useState(tour[0]?.id ?? '');
+  const [panoId, setPanoId] = useState(() => { const q = new URLSearchParams(location.search).get('pano'); return tour.find((p) => p.id === q)?.id ?? tour[0]?.id ?? ''; }); // ?pano=p5_roof — открыть сразу нужную панораму
 
   const selectVilla = (id: string) => {
     if (id === villaId) return;

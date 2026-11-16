@@ -5,6 +5,7 @@ export type Pano = {
   id: string;
   title: string;
   src: string;
+  hi?: string; // та же панорама в 8К: догружается на компьютере после обычной
   stereo?: 'tb';
   startYaw?: number; // куда смотрим при входе, градусы от центра картинки
   links: PanoLink[];
@@ -13,8 +14,11 @@ export type Pano = {
 // Панорамы 360°: болванки из тура (Capture.tsx, шот-лист public/shotlist.json) → FLUX 3 в Higgsfield, 26.10.2026.
 // Переход между панорамами — кнопками внизу экрана; точки-переходы внутри панорам не ставим
 // (нейросеть не гарантирует точное положение дверей). Художественная визуализация.
+// Панорамы, пересобранные по граням в 8К (с 16.11.2026): у них есть файл <имя>_8k.jpg
+const HI = new Set(['villa1_p5_roof']);
+const START: Record<string, number> = { villa1_p5_roof: -50 }; // куда смотрим при входе: сад с дорожкой слева, лагуна справа
 const tour = (villa: string, items: [string, string][]): Pano[] =>
-  items.map(([id, title]) => ({ id, title, src: `panos/${villa}_${id}.jpg`, links: [] }));
+  items.map(([id, title]) => ({ id, title, src: `panos/${villa}_${id}.jpg`, ...(HI.has(`${villa}_${id}`) ? { hi: `panos/${villa}_${id}_8k.jpg` } : {}), ...(`${villa}_${id}` in START ? { startYaw: START[`${villa}_${id}`] } : {}), links: [] }));
 
 export const PANO_TOURS: Record<string, Pano[]> = {
   villa1: [{ id: 'complex', title: 'Весь комплекс с дрона', src: 'panos/complex_p1_drone.jpg', links: [] }, ...tour('villa1', [['p1_pool', 'Терраса у бассейна'], ['p2_covered_terrace', 'Крытая терраса'], ['p3_kitchen', 'Кухня-гостиная'], ['p4_bedroom', 'Спальня'], ['p5_roof', 'Терраса на крыше']])],

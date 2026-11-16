@@ -1,6 +1,6 @@
 // Панорамный режим: сфера с equirectangular-текстурой, стерео для VR, хотспоты-переходы,
 // обзор перетаскиванием (мышь/тач) и зум колесом.
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useLoader, useThree, type ThreeEvent } from '@react-three/fiber';
 import { BackSide, CanvasTexture, Mesh, SRGBColorSpace, Texture, TextureLoader, Vector3 } from 'three';
 import type { Pano, PanoLink } from './panos';
@@ -25,6 +25,7 @@ function Sphere({ texture, layer, uvOffset, uvRepeat }: { texture: Texture; laye
   const tex = useMemo(() => {
     const t = texture.clone();
     t.colorSpace = SRGBColorSpace;
+    t.anisotropy = 8; // у горизонта панорама видна под углом к сфере: без этого мылится
     t.repeat.set(1, uvRepeat);
     t.offset.set(0, uvOffset);
     t.needsUpdate = true;
@@ -127,8 +128,18 @@ function PanoControls() {
 }
 
 export function PanoScene({ pano, all, onJump }: { pano: Pano; all: Pano[]; onJump: (id: string) => void }) {
-  const texture = useLoader(TextureLoader, asset(pano.src));
-  const { camera } = useThree();
+  const base = useLoader(TextureLoader, asset(pano.src));
+  const { camera, gl } = useThree();
+  // панорама высокого разрешения (8К) догружается после обычной и подменяет её: на компьютере, где видеокарта держит
+  // текстуру 8192 px. На телефонах остаётся обычная (память и трафик)
+  const [hi, setHi] = useState<{ id: string; tex: Texture } | null>(null);
+  useEffect(() => {
+    if (!pano.hi || gl.capabilities.maxTextureSize < 8192 || matchMedia('(pointer: coarse)').matches) return;
+    let alive = true, got: Texture | null = null;
+    new TextureLoader().load(asset(pano.hi), (t) => { got = t; if (alive) setHi({ id: pano.id, tex: t }); else t.dispose(); });
+    return () => { alive = false; got?.dispose(); setHi(null); };
+  }, [pano, gl]);
+  const texture = hi && hi.id === pano.id ? hi.tex : base;
   const titles = useMemo(() => Object.fromEntries(all.map((p) => [p.id, p.title])), [all]);
 
   // при смене панорамы повернуться в стартовое направление; обычная камера видит слой 1 (левый глаз)
