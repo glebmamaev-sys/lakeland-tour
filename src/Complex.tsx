@@ -821,10 +821,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
     // Стекло и посадки не считаются. Проверка лучом в центре блока 0,2 м; открытые блоки расширяются на один блок,
     // чтобы тонкие перила и бортики над дырой не оставляли под собой полоску
     const openedCell = new Uint8Array(nx * nz); // клетки участка внутри пятна дома, где рельеф открыт (дворики, приямки): в замер посадки не входят
-    const UB = 2, ubw = Math.ceil(wnx / UB), ubh = Math.ceil(wnz / UB); const underMap = new Float32Array(ubw * ubh).fill(NaN), thickMap = new Float32Array(ubw * ubh), paveMap = new Float32Array(ubw * ubh).fill(NaN); // блоки 0,2 м; thickMap — высота детали над её нижней кромкой (стена ≥ 0,45 м, мебель и плиты тоньше)
+    const UB = 2, ubw = Math.ceil(wnx / UB), ubh = Math.ceil(wnz / UB); const underMap = new Float32Array(ubw * ubh).fill(NaN), thickMap = new Float32Array(ubw * ubh), paveMap = new Float32Array(ubw * ubh).fill(NaN), lieMap = new Float32Array(ubw * ubh).fill(NaN), poolMap = new Uint8Array(ubw * ubh); /* lieMap: верх плоской детали модели, лежащей на рельефе Revit, площадью от 4 м² (отмостка у бассейна, плита террасы); poolMap: над блоком вода бассейна */ // блоки 0,2 м; thickMap — высота детали над её нижней кромкой (стена ≥ 0,45 м, мебель и плиты тоньше)
     const paveAt = (x: number, z: number): number | null => { let best: number | null = null; const bi = Math.round((x - x0) / WX / UB - 0.5 + 0.25), bj = Math.round((z - z0) / WX / UB - 0.5 + 0.25); for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) { const i = bi + di, j = bj + dj; if (i < 0 || j < 0 || i >= ubw || j >= ubh) continue; const y = paveMap[j * ubw + i]; if (!Number.isNaN(y) && (best === null || y > best)) best = y; } return best; };
-    (window as unknown as { __under: unknown }).__under = { bw: ubw, bh: ubh, size: UB * WX, map: underMap, pave: paveMap, thick: thickMap };
-    { const BL = UB, bw = ubw, bh = ubh; const open = new Uint8Array(bw * bh); const ray = new Ray(new Vector3(), new Vector3(0, -1, 0)), up = new Ray(new Vector3(), new Vector3(0, 1, 0)); let opened = 0;
+    (window as unknown as { __under: unknown }).__under = { bw: ubw, bh: ubh, size: UB * WX, map: underMap, pave: paveMap, thick: thickMap, lie: lieMap, pool: poolMap };
+    { const BL = UB, bw = ubw, bh = ubh; const open = new Uint8Array(bw * bh), lieTop = new Float32Array(bw * bh).fill(NaN); const ray = new Ray(new Vector3(), new Vector3(0, -1, 0)), up = new Ray(new Vector3(), new Vector3(0, 1, 0)); let opened = 0;
       for (const { col, water: wc, pave, gnd, bb } of coverCols) {
         const bi0 = Math.max(0, Math.floor((bb.min.x - x0) / WX / BL)), bi1 = Math.min(bw - 1, Math.ceil((bb.max.x - x0) / WX / BL)), bj0 = Math.max(0, Math.floor((bb.min.z - z0) / WX / BL)), bj1 = Math.min(bh - 1, Math.ceil((bb.max.z - z0) / WX / BL));
         for (let bj = bj0; bj <= bj1; bj++) for (let bi = bi0; bi <= bi1; bi++) {
@@ -834,14 +834,24 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           if (col.bvh.raycastFirst(ray, DoubleSide) || (wc && wc.bvh.raycastFirst(ray, DoubleSide))) continue;
           open[bj * bw + bi] = 1;
         }
+        if (wc) for (let bj = bj0; bj <= bj1; bj++) for (let bi = bi0; bi <= bi1; bi++) { ray.origin.set(x0 + (bi * BL + BL / 2 - 0.5) * WX, 80, z0 + (bj * BL + BL / 2 - 0.5) * WX); if (wc.bvh.raycastFirst(ray, DoubleSide)) poolMap[bj * bw + bi] = 1; }
         // нижняя кромка модели над каждым блоком (луч снизу вверх): по ней ниже закрываются зазоры под висящими стенками
         for (let bj = bj0; bj <= bj1; bj++) for (let bi = bi0; bi <= bi1; bi++) {
           up.origin.set(x0 + (bi * BL + BL / 2 - 0.5) * WX, -40, z0 + (bj * BL + BL / 2 - 0.5) * WX); const hit = col.bvh.raycastFirst(up, DoubleSide);
           if (hit && !(underMap[bj * bw + bi] <= hit.point.y)) { underMap[bj * bw + bi] = hit.point.y; const y0 = hit.point.y; up.origin.y = y0 + 0.02; const h2 = col.bvh.raycastFirst(up, DoubleSide); thickMap[bj * bw + bi] = h2 ? h2.point.y - y0 : 0; }
-          if (pave && gnd) { ray.origin.set(up.origin.x, 80, up.origin.z); const gh = gnd.bvh.raycastFirst(ray, DoubleSide); if (gh) { ray.origin.y = gh.point.y + 0.3; const ph = pave.bvh.raycastFirst(ray, DoubleSide); if (ph && Math.abs(ph.point.y - gh.point.y) < 0.1) paveMap[bj * bw + bi] = ph.point.y; } }
+          if (gnd) { ray.origin.set(up.origin.x, 80, up.origin.z); const gh = gnd.bvh.raycastFirst(ray, DoubleSide); if (gh) { const gy = gh.point.y; ray.origin.y = gy + 0.3; const ph = pave ? pave.bvh.raycastFirst(ray, DoubleSide) : null; if (ph && Math.abs(ph.point.y - gy) < 0.1) paveMap[bj * bw + bi] = ph.point.y;
+            const lh = col.bvh.raycastFirst(ray, DoubleSide); const un = underMap[bj * bw + bi]; if (lh && lh.point.y - gy > -0.03 && lh.point.y - un <= 0.25 && !(lieTop[bj * bw + bi] >= lh.point.y)) lieTop[bj * bw + bi] = lh.point.y; } }
         }
         col.geometry.dispose(); wc?.geometry.dispose(); pave?.geometry.dispose();
       }
+      // лежащие плоскости: верх детали не дальше 0,3 м над рельефом Revit и не ниже него (заглублённые фундаменты не в счёт),
+      // под ним до нижней кромки модели не больше 0,25 м (не стена), ровный между соседними блоками (перепад до 3 см),
+      // связной площадью от 4 м² (не мебель и не ступени)
+      { const top = lieTop;
+        const seen = new Uint8Array(bw * bh); const q: number[] = [];
+        for (let k0 = 0; k0 < bw * bh; k0++) { if (seen[k0] || Number.isNaN(top[k0])) continue; q.length = 0; q.push(k0); seen[k0] = 1;
+          for (let qi = 0; qi < q.length; qi++) { const k = q[qi], bi = k % bw; for (const n of [k - 1, k + 1, k - bw, k + bw]) { if (n < 0 || n >= bw * bh || seen[n] || Number.isNaN(top[n]) || Math.abs(top[n] - top[k]) > 0.03) continue; if ((n === k - 1 && bi === 0) || (n === k + 1 && bi === bw - 1)) continue; seen[n] = 1; q.push(n); } }
+          if (q.length >= 100) for (const k of q) lieMap[k] = top[k]; } }
       for (let bj = 0; bj < bh; bj++) for (let bi = 0; bi < bw; bi++) { if (!open[bj * bw + bi]) continue; opened++;
         { const ci = Math.round((bi * BL + BL / 2 - 0.5) * WX / step), cj = Math.round((bj * BL + BL / 2 - 0.5) * WX / step); if (ci >= 0 && cj >= 0 && ci < nx && cj < nz) openedCell[cj * nx + ci] = 1; }
         for (let j = (bj - 1) * BL; j < (bj + 2) * BL; j++) for (let i = (bi - 1) * BL; i < (bi + 2) * BL; i++) if (i >= 0 && j >= 0 && i < wnx && j < wnz) whide[j * wnx + i] = 0; }
@@ -952,13 +962,13 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // земля под мощением Revit встаёт на его уровень (на 5 см ниже): наш рельеф местами ниже рельефа Revit на 0,3–0,9 м,
       // и плиточные дорожки вилл 1.x висели над газоном. Клетка поднимается, если мощение занимает хотя бы четверть её
       // площади; дальше коридор дорожек срезает эти клетки там, где проходит тропинка (PathGrade), а мощение над ней режется
-      { let seated = 0; const R = Math.max(1, Math.round(step / 2 / (UB * WX)));
+      { let seated = 0; const R = Math.max(1, Math.round(step / 2 / (UB * WX))); const seatedCell = new Uint8Array(nx * nz);
         for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
           const k = j * nx + i, x = x0 + i * step, z = z0 + j * step; if (shore[k] || hiddenW(x, z) || !inPoly(x, z, B)) continue;
           const bi = Math.round((x - x0) / WX / UB - 0.25), bj = Math.round((z - z0) / WX / UB - 0.25); let sum = 0, cnt = 0, all = 0;
           for (let dj = -R; dj <= R; dj++) for (let di = -R; di <= R; di++) { const a = bi + di, b2 = bj + dj; if (a < 0 || b2 < 0 || a >= ubw || b2 >= ubh) continue; all++; const y = paveMap[b2 * ubw + a]; if (!Number.isNaN(y)) { sum += y; cnt++; } }
           if (cnt * 4 < all) continue; const y = sum / cnt - 0.05; if (Math.abs(y - h[k]) < 0.03 || Math.abs(y - h[k]) > 1.2) continue;
-          h[k] = y; relaxFixed[k] = 1; seated++; }
+          h[k] = y; relaxFixed[k] = 1; seated++; seatedCell[k] = 1; }
         // то же под стенами, подрезанными снизу по рельефу Revit: где нижняя кромка стены (деталь выше 0,45 м) висит над
         // нашим газоном на 4–80 см, клетка поднимается до кромки + 3 см, и стена уходит в землю
         let walls = 0; const RW = R + 2; /* стена в 0,6 м от центра клетки тоже поднимает её: газон у стены задают соседние клетки */ const noWallSeat = /nowallseat/.test(window.location.search); // для снимков «до» (отладка)
@@ -966,7 +976,18 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           const k = j * nx + i, x = x0 + i * step, z = z0 + j * step; if (shore[k] || hiddenW(x, z) || !inPoly(x, z, B)) continue;
           const bi = Math.round((x - x0) / WX / UB - 0.25), bj = Math.round((z - z0) / WX / UB - 0.25); let top = -Infinity;
           for (let dj = -RW; dj <= RW; dj++) for (let di = -RW; di <= RW; di++) { const a = bi + di, b2 = bj + dj; if (a < 0 || b2 < 0 || a >= ubw || b2 >= ubh) continue; const u = underMap[b2 * ubw + a]; if (Number.isNaN(u) || thickMap[b2 * ubw + a] < 0.45) continue; const d = u - h[k]; if (d > 0.04 && d < 0.8 && u > top) top = u; }
-          if (top === -Infinity || noWallSeat) continue; h[k] = top + 0.03; relaxFixed[k] = 1; walls++; }
+          if (top === -Infinity || noWallSeat) continue; h[k] = top + 0.03; relaxFixed[k] = 1; walls++; seatedCell[k] = 1; }
+        // газон у кромки тонкой плоской детали модели (lieMap: каменная отмостка вокруг бассейна виллы 3, бортики): клетка в
+        // 0,6 м от такой плоскости встаёт на 3 см ниже неё (ниже самой низкой, если их рядом несколько). Иначе отмостка висела над газоном на 5–15 см, а местами газон
+        // лез на камень. Поправка не больше 30 см, чтобы не трогать заглублённые террасы
+        let lies = 0; const lieDbg: number[] = []; const noLieSeat = /nolieseat/.test(window.location.search);
+        for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+          const k = j * nx + i, x = x0 + i * step, z = z0 + j * step; if (seatedCell[k] || shore[k] || hiddenW(x, z) || !inPoly(x, z, B)) continue;
+          const bi = Math.round((x - x0) / WX / UB - 0.25), bj = Math.round((z - z0) / WX / UB - 0.25); let y = NaN, wet = false; for (let dj = -1; dj <= 1 && !wet; dj++) for (let di = -1; di <= 1; di++) if (poolMap[(bj + dj) * ubw + bi + di]) { wet = true; break; } if (wet) continue; /* под водой бассейна земля остаётся ниже зеркала */ // самая низкая из плоскостей рядом: газон не должен закрывать ни одну (отмостка ниже бортика на 10 см)
+          for (let dj = -RW; dj <= RW; dj++) for (let di = -RW; di <= RW; di++) { const a = bi + di, b2 = bj + dj; if (a < 0 || b2 < 0 || a >= ubw || b2 >= ubh) continue; const l = lieMap[b2 * ubw + a]; if (Number.isNaN(l) || !Number.isNaN(paveMap[b2 * ubw + a])) continue; if (!(l >= y)) y = l; }
+          if (Number.isNaN(y) || noLieSeat) continue; const d = y - 0.03 - h[k]; if (Math.abs(d) < 0.015 || Math.abs(d) > 0.3) continue;
+          h[k] = y - 0.03; relaxFixed[k] = 1; lies++; if (lieDbg.length < 3000) lieDbg.push(+x.toFixed(1), +z.toFixed(1), +d.toFixed(2)); }
+        console.info('[lie] газон подведён к кромке лежащих плоскостей, клеток:', lies); (window as unknown as { __lieSeat: unknown }).__lieSeat = { n: lies, at: lieDbg };
         console.info('[walls] земля подведена под висящие стены, клеток:', walls); (window as unknown as { __wallSeat: number }).__wallSeat = walls;
         console.info('[paving] земля подведена под мощение Revit, клеток:', seated); (window as unknown as { __pavingSeat: number }).__pavingSeat = seated; }
       relax(relaxFixed);
@@ -1132,6 +1153,12 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
           for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const y = gridH(cx(bi + di), cz(bj + dj)); if (y === null) continue; const un = underMap[(bj + dj) * ubw + bi + di]; if (!Number.isNaN(un) && un - y < 1.6) continue; // сосед не открыт: над ним деталь модели
             const d = u - y; if (d <= 0.1 || d >= 1.6) continue; n++; if (d > worst) worst = d; if (at.length < 600) at.push([+cx(bi).toFixed(1), +cz(bj).toFixed(1), +d.toFixed(2)]); break; } }
         (window as unknown as { __wallHang: unknown }).__wallHang = { len: +(n * UB * WX).toFixed(1), worst: +worst.toFixed(2), at }; console.info('[walls] стены над газоном (зазор больше 10 см), м:', (n * UB * WX).toFixed(1), 'до', worst.toFixed(2)); }
+      // замер: кромка тонкой плоской детали модели (lieMap) относительно газона в соседнем открытом блоке: висит (выше 7 см) или утоплена (газон выше на 3 см и больше)
+      { let hang = 0, sunk = 0, worst = 0; const at: number[][] = []; const cx = (bi: number) => x0 + (bi * UB + UB / 2 - 0.5) * WX, cz = (bj: number) => z0 + (bj * UB + UB / 2 - 0.5) * WX;
+        for (let bj = 1; bj < ubh - 1; bj++) for (let bi = 1; bi < ubw - 1; bi++) { const l = lieMap[bj * ubw + bi]; if (Number.isNaN(l) || !Number.isNaN(paveMap[bj * ubw + bi])) continue;
+          for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nb = (bj + dj) * ubw + bi + di; if (!Number.isNaN(lieMap[nb]) || !Number.isNaN(underMap[nb])) continue; const y = gridH(cx(bi + di), cz(bj + dj)); if (y === null) continue;
+            const d = l - y; if (d > 0.07 && d < 0.6) { hang++; if (d > worst) worst = d; } else if (d < -0.03 && d > -0.6) sunk++; else continue; if (at.length < 600) at.push([+cx(bi).toFixed(1), +cz(bj).toFixed(1), +d.toFixed(2)]); break; } }
+        (window as unknown as { __lieHang: unknown }).__lieHang = { hang: +(hang * UB * WX).toFixed(1), sunk: +(sunk * UB * WX).toFixed(1), worst: +worst.toFixed(2), at }; console.info('[lie] кромки лежащих плоскостей: висят, м:', (hang * UB * WX).toFixed(1), 'утоплены, м:', (sunk * UB * WX).toFixed(1)); }
       let cut = 0; for (const inst of instances) { const rg = revitGround.get(inst); if (rg) { cut += cutHangingPaving(inst, gridH, rg); rg.geometry.dispose(); } } revitGround.clear(); console.info('[paving] срезано повисшего мощения Revit, кусков до 0,15 м:', cut); (window as unknown as { __pavingCut: number }).__pavingCut = cut; }
     const walls = terr ? wallGeometry(terr.walls) : null; const stairG = { treads: graded ? stepGeometry(graded.steps) : null, cheeks: null as BufferGeometry | null }; void inHouseMask;
     // верх ступени под точкой (для персонажей: игрок ходит по коллайдеру ступеней сам)
