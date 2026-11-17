@@ -15,12 +15,15 @@ export type Pano = {
 // Переход между панорамами — кнопками внизу экрана; точки-переходы внутри панорам не ставим
 // (нейросеть не гарантирует точное положение дверей). Художественная визуализация.
 // Панорамы, пересобранные по граням в 8К (с 16.11.2026): у них есть файл <имя>_8k.jpg
-const HI = new Set(['villa1_p1_pool', 'villa1_p2_covered_terrace', 'villa1_p3_kitchen', 'villa1_p4_bedroom', 'villa1_p5_roof']);
+const HI = new Set(['villa1', 'villa21', 'villa22', 'villa3']); // виллы, у которых все панорамы пересобраны в 8К
 // Куда смотрим при входе: бассейн — на террасу с диваном и фасад; крытая терраса — на лагуну; кухня — на стол и гостиную;
 // спальня — на кровать; крыша — сад с дорожкой слева, лагуна справа
-const START: Record<string, number> = { villa1_p1_pool: 45, villa1_p2_covered_terrace: -95, villa1_p3_kitchen: -100, villa1_p4_bedroom: 84, villa1_p5_roof: 45 };
+const START: Record<string, number> = { villa1_p1_pool: 45, villa1_p2_covered_terrace: -95, villa1_p3_kitchen: -100, villa1_p4_bedroom: 84, villa1_p5_roof: 45,
+  villa21_p1_pool: 30, villa21_p2_living: -50, villa21_p3_bedroom: 36, villa21_p4_terrace_l2: 43,
+  villa22_p1_pool: 25, villa22_p2_living: -40, villa22_p3_bedroom: -29, villa22_p4_terrace_l2: 25,
+  villa3_p1_pool: -29, villa3_p2_living: -18, villa3_p3_bedroom: 75, villa3_p4_terrace_upper: 75 };
 const tour = (villa: string, items: [string, string][]): Pano[] =>
-  items.map(([id, title]) => ({ id, title, src: `panos/${villa}_${id}.jpg`, ...(HI.has(`${villa}_${id}`) ? { hi: `panos/${villa}_${id}_8k.jpg` } : {}), ...(`${villa}_${id}` in START ? { startYaw: START[`${villa}_${id}`] } : {}), links: [] }));
+  items.map(([id, title]) => ({ id, title, src: `panos/${villa}_${id}.jpg`, ...(HI.has(villa) ? { hi: `panos/${villa}_${id}_8k.jpg` } : {}), ...(`${villa}_${id}` in START ? { startYaw: START[`${villa}_${id}`] } : {}), links: [] }));
 
 export const PANO_TOURS: Record<string, Pano[]> = {
   villa1: [{ id: 'complex', title: 'Весь комплекс с дрона', src: 'panos/complex_p1_drone.jpg', hi: 'panos/complex_p1_drone_8k.jpg', links: [] }, ...tour('villa1', [['p1_pool', 'Терраса у бассейна'], ['p2_covered_terrace', 'Крытая терраса'], ['p3_kitchen', 'Кухня-гостиная'], ['p4_bedroom', 'Спальня'], ['p5_roof', 'Терраса на крыше']])],
