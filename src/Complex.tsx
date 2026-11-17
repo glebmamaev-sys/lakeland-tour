@@ -750,6 +750,10 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
       // газоне была дыра, сквозь которую виднелась вода лагуны (замечание заказчика: «дыра на входе, земля торчит»)
       const col = buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => !!m.userData.helper || m.userData.role === 'water' || m.userData.role === 'ground' || m.userData.role === 'terrain' || m.userData.role === 'glass' || m.userData.role === 'plants'));
       if (!col) continue;
+      // Наша мебель (шезлонги, кашпо, основания зонтов) — не плита дома. Она входит в общий коллайдер, и там, где под ней
+      // нет пола модели (сад виллы 3 у бассейна), её верх принимался за «плиту»: вокруг каждого шезлонга и кашпо вставал
+      // белый короб цоколя, а газон под ними скрывался. Попадания луча в мебель отбрасываются по отдельному коллайдеру
+      const fcol = buildColliderFromParts(collectColliderParts(inst, [], undefined, (m) => m.userData.role !== 'furniture'));
       const planL = data.plans[hi.model]; const minLevel = planL ? Math.min(...planL.levels.map((l) => l.level)) : 0;
       let found = 0, eaves = 0; const mine: number[] = []; const OVERHANG = 3.0; const cp = col.geometry.getAttribute('position') as BufferAttribute; const e1 = new Vector3(), e2 = new Vector3(), nrm = new Vector3(), v0 = new Vector3();
       // нормаль треугольника по индексу грани (геометрия коллайдера неиндексированная, мировые координаты)
@@ -768,7 +772,9 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
         ray.origin.set(x0 + i * step, 80, z0 + j * step);
         const hits = col.bvh.raycast(ray, DoubleSide);
         if (!hits.length) continue;
-        let low = Infinity; for (const ht of hits) if (upFacing(ht)) low = Math.min(low, 80 - ht.distance);
+        const fy = fcol ? fcol.bvh.raycast(ray, DoubleSide).map((q) => 80 - q.distance) : [];
+        let low = Infinity, real = 0; for (const ht of hits) { const y = 80 - ht.distance; if (fy.some((q) => Math.abs(q - y) < 0.003)) continue; real++; if (upFacing(ht)) low = Math.min(low, y); }
+        if (!real) continue; // над клеткой только мебель
         low = Math.max(low, inst.position.y + minLevel - 0.3); // ниже нижнего пола дома поверхностей, по которым ходят, нет
         // свес без пола под ним (карниз кровли, козырёк, навес): нижняя «плита» выше земли площадки больше чем на этаж —
         // это не пол. Раньше от неё до земли тянулась стенка цоколя: белые «пилоны» 8 м у вилл 2.2–2.5, 4–9 м у 1.x
@@ -1021,6 +1027,19 @@ export function ComplexScene({ walk = false }: { walk?: boolean }) {
             let level = false; for (let dj = -1; dj <= 1 && !level; dj++) for (let di = -1; di <= 1; di++) { const n = (j + dj) * nx + i + di; if (footMask[n] && Math.abs(slabTop[n] - lo) < 0.2) { level = true; break; } }
             if (level) { h[k] = lo; fangs++; fangCell[k] = 1; } } }
         console.info('[fangs] клетки-пики у стен домов опущены:', fangs); (window as unknown as { __fangs: number }).__fangs = fangs; }
+      // газон вровень с плитой: уличная клетка у края тонкой плиты пола (терраса перед витражами виллы 3), лежащая на той же
+      // отметке, что и верх плиты (±5 см), опускается на 4 см ниже него. Иначе газон и плита спорили за один уровень, и
+      // трава наползала на плитку зубцами по сетке 0,5 м. Плита должна уходить в землю (низ ниже газона на 8 см и больше),
+      // чтобы не трогать ковры и основания зонтов; мощение Revit (paveMap) и бортики бассейнов обрабатываются своими правилами
+      { let flush = 0; const RB = 3; // блоки 0,2 м: радиус 0,6 м — клетка и её соседние треугольники
+        for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+          const k = j * nx + i, x = x0 + i * step, z = z0 + j * step; if (shore[k] || hiddenW(x, z) || !inPoly(x, z, B)) continue;
+          const bi = Math.round((x - x0) / WX / UB - 0.25), bj = Math.round((z - z0) / WX / UB - 0.25); let y = Infinity, wet = false;
+          for (let dj = -RB; dj <= RB && !wet; dj++) for (let di = -RB; di <= RB; di++) { const a = bi + di, b2 = bj + dj; if (a < 0 || b2 < 0 || a >= ubw || b2 >= ubh) continue; const q = b2 * ubw + a;
+            if (poolMap[q]) { wet = true; break; } const u = underMap[q]; if (Number.isNaN(u) || !Number.isNaN(paveMap[q])) continue; const t = thickMap[q]; if (t > 0.3 || u > h[k] - 0.08) continue;
+            const top = u + t; if (Math.abs(top - h[k]) <= 0.05 && top < y) y = top; }
+          if (wet || y === Infinity || h[k] <= y - 0.04) continue; h[k] = y - 0.04; flush++; }
+        console.info('[flush] газон опущен у кромки плит, клеток:', flush); (window as unknown as { __flush: number }).__flush = flush; }
       // кромка скрытого пятна дома: клетки под домом, граничащие с улицей, берут уличную отметку — переходные треугольники
       // на границе становятся плоскими (иначе «пила» там, где рельеф Revit под домом выше/ниже улицы)
       { const src = Float32Array.from(h); const hid = (i: number, j: number) => hiddenW(x0 + i * step, z0 + j * step);
